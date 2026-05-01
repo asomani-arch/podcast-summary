@@ -3,44 +3,143 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Podcast Summary Agent</title>
+  <title>PodcastAI · Episode Summaries</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>🎙️ Podcast Summary Agent</h1>
-      <p>Subscribe to a podcast feed and get detailed summaries by email when new episodes drop.</p>
-    </header>
 
-    <section class="card">
-      <h2>Add a podcast</h2>
-      <div class="form-row">
-        <input type="text" id="rssUrl" placeholder="Podcast RSS feed URL" class="input" />
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="logo">
+        <svg class="logo-wave" viewBox="0 0 36 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 10 Q6 2 10 10 Q14 18 18 10 Q22 2 26 10 Q30 18 34 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo-text">Podcast<span class="accent">AI</span></span>
       </div>
-      <div class="form-row">
-        <input type="email" id="email" placeholder="Email to send summaries to" class="input" />
-      </div>
-      <button id="subscribeBtn" onclick="subscribe()">Subscribe</button>
-      <div id="msg" class="msg hidden"></div>
-    </section>
+      <button class="btn-subs" onclick="toggleSubsTray()">
+        Subscriptions
+        <span class="badge" id="subCount">0</span>
+      </button>
+    </div>
+  </header>
 
-    <section class="card">
-      <div class="section-header">
-        <h2>Your subscriptions</h2>
-        <button class="ghost" onclick="loadFeeds()">↻ Refresh</button>
+  <section class="hero">
+    <p class="hero-label">AI-powered summaries</p>
+    <h1 class="hero-title">Search any podcast.<br>Get the insights instantly.</h1>
+    <p class="hero-sub">Business and tech, distilled from any episode.</p>
+    <div class="search-wrap">
+      <svg class="search-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.8"/>
+        <path d="m18 18-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      <input
+        type="text"
+        id="searchInput"
+        class="search-input"
+        placeholder='Try "Lex Fridman", "a16z", "Masters of Scale"…'
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <div class="search-spinner hidden" id="searchSpinner">
+        <div class="spinner"></div>
       </div>
-      <div id="feedList" class="list"></div>
-    </section>
+    </div>
+  </section>
 
-    <section class="card">
-      <div class="section-header">
-        <h2>Recent summaries</h2>
-        <button class="ghost" onclick="loadEpisodes()">↻ Refresh</button>
+  <main class="main">
+
+    <div class="empty-state" id="emptyState">
+      <svg class="empty-icon" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="40" cy="40" r="28" stroke="currentColor" stroke-width="1.2" opacity="0.2"/>
+        <circle cx="40" cy="40" r="16" stroke="currentColor" stroke-width="1.5" opacity="0.35"/>
+        <circle cx="40" cy="40" r="5" fill="currentColor" opacity="0.6"/>
+        <path d="M40 4C20.1 4 4 20.1 4 40" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.15"/>
+        <path d="M76 40C76 59.9 59.9 76 40 76" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.15"/>
+      </svg>
+      <p>Search for a podcast above to browse episodes<br>and get AI-generated summaries.</p>
+    </div>
+
+    <div class="results-section hidden" id="searchResults">
+      <p class="results-label" id="resultsLabel"></p>
+      <div class="results-grid" id="resultsGrid"></div>
+    </div>
+
+    <div class="podcast-detail hidden" id="podcastDetail">
+      <button class="back-btn" onclick="closeDetail()">
+        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Back to results
+      </button>
+
+      <div class="detail-hero" id="detailHero">
+        <div class="detail-hero-bg" id="detailHeroBg"></div>
+        <img class="detail-artwork" id="detailArtwork" src="" alt="" />
+        <div class="detail-info">
+          <p class="detail-publisher" id="detailPublisher"></p>
+          <h2 class="detail-title" id="detailTitle"></h2>
+          <p class="detail-desc" id="detailDesc"></p>
+          <div class="detail-actions">
+            <button class="btn-subscribe" id="subscribeBtn" onclick="toggleSubscribe()">
+              Subscribe to new episodes
+            </button>
+          </div>
+        </div>
       </div>
-      <div id="episodeList" class="list"></div>
-    </section>
+
+      <div class="episodes-wrap">
+        <p class="section-label">Latest Episodes</p>
+        <div class="episode-list" id="episodeList"></div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Summary Panel -->
+  <div class="panel-backdrop hidden" id="panelBackdrop" onclick="closePanel()"></div>
+  <aside class="summary-panel" id="summaryPanel">
+    <div class="panel-head">
+      <div class="panel-head-titles">
+        <p class="panel-podcast-name" id="panelPodcast"></p>
+        <h3 class="panel-ep-title" id="panelTitle"></h3>
+      </div>
+      <div class="panel-head-actions">
+        <button class="btn-email hidden" id="emailBtn" onclick="emailCurrentSummary()">
+          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="m1 4 7 5 7-5" stroke="currentColor" stroke-width="1.4"/>
+          </svg>
+          Email me
+        </button>
+        <button class="btn-icon" onclick="closePanel()">
+          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 3l10 10M13 3 3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="panel-body" id="panelBody"></div>
+  </aside>
+
+  <!-- Subscriptions Tray -->
+  <div class="panel-backdrop hidden" id="trayBackdrop" onclick="toggleSubsTray()"></div>
+  <div class="subs-tray" id="subsTray">
+    <div class="tray-head">
+      <h3 class="tray-title">My Subscriptions</h3>
+      <button class="btn-icon" onclick="toggleSubsTray()">
+        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 3l10 10M13 3 3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="subs-list" id="subsList"></div>
   </div>
+
+  <!-- Toast -->
+  <div class="toast hidden" id="toast"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="/static/js/app.js"></script>

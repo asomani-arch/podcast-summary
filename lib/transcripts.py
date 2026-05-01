@@ -1,30 +1,38 @@
-"""Get the best available text source for an episode.
-
-Strategy (hybrid):
-  1. Try to find a YouTube version of the episode and fetch its transcript.
-  2. Fall back to the RSS show notes / description.
-
-Returns: (text, source) where source is 'youtube' or 'shownotes'.
-"""
+"""Transcript extraction: YouTube captions → RSS show notes → Gemini audio transcription."""
+import os
 import re
+import tempfile
 import requests
 from urllib.parse import quote
 from youtube_transcript_api import YouTubeTranscriptApi
 
 
-def get_transcript(podcast_title: str, episode_title: str, description: str) -> tuple[str, str]:
-    # 1. Attempt YouTube
-    yt_text = _try_youtube(podcast_title, episode_title)
-    if yt_text:
-        return yt_text, "youtube"
+def get_transcript(
+    podcast_title: str,
+    episode_title: str,
+    description: str = "",
+    audio_url: str = "",
+) -> tuple[str, str]:
+    # 1. YouTube captions
+    yt = _try_youtube(podcast_title, episode_title)
+    if yt:
+        return yt, "youtube"
 
-    # 2. Fall back to show notes (strip HTML)
+    # 2. Rich show notes (>300 chars of real content)
     clean = re.sub(r"<[^>]+>", "", description or "").strip()
+    if len(clean) > 300:
+        return clean, "shownotes"
+
+    # 3. Direct audio → Gemini transcription
+    if audio_url:
+        audio_text = _try_audio_gemini(audio_url)
+        if audio_text:
+            return audio_text, "audio"
+
     return clean, "shownotes"
 
 
 def _try_youtube(podcast_title: str, episode_title: str) -> str | None:
-    """Search YouTube for the episode and return its transcript if found."""
     try:
         video_id = _search_youtube(f"{podcast_title} {episode_title}")
         if not video_id:
@@ -36,13 +44,56 @@ def _try_youtube(podcast_title: str, episode_title: str) -> str | None:
 
 
 def _search_youtube(query: str) -> str | None:
-    """Naive scrape of YouTube search results to grab the first video ID.
-    For production, swap in the YouTube Data API for reliability.
-    """
     try:
         url = f"https://www.youtube.com/results?search_query={quote(query)}"
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
-        match = re.search(r"\"videoId\":\"([a-zA-Z0-9_-]{11})\"", resp.text)
+        match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', resp.text)
         return match.group(1) if match else None
     except Exception:
         return None
+
+
+def _try_audio_gemini(audio_url: str) -> str:
+    """Download audio (up to 50 MB) and transcribe via Gemini 2.5 Flash."""
+    try:
+        from google import genai
+
+        resp = requests.get(audio_url, timeout=30, stream=True, verify=False)
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "")
+        if "m4a" in content_type or audio_url.lower().endswith(".m4a"):
+            suffix = ".m4a"
+        elif "ogg" in content_type:
+            suffix = ".ogg"
+        elif "wav" in content_type:
+            suffix = ".wav"
+        else:
+            suffix = ".mp3"
+
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+                tmp_path = f.name
+                downloaded = 0
+                for chunk in resp.iter_content(chunk_size=65536):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if downloaded >= 50 * 1024 * 1024:
+                        break
+
+            client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            uploaded = client.files.upload(path=tmp_path)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=["Please transcribe this podcast audio completely and accurately:", uploaded],
+            )
+            return response.text or ""
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+    except Exception:
+        return ""

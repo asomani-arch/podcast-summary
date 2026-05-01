@@ -1,13 +1,22 @@
 -- Run once against your Vercel Postgres database to create tables.
+-- v2 migration: add podcast_index_id, artwork_url, publisher to feeds.
 
 CREATE TABLE IF NOT EXISTS feeds (
   id SERIAL PRIMARY KEY,
   rss_url TEXT UNIQUE NOT NULL,
   podcast_title TEXT,
-  email TEXT NOT NULL,            -- where summaries get sent
+  email TEXT NOT NULL,
+  podcast_index_id TEXT,          -- Podcast Index feed ID
+  artwork_url TEXT,               -- cover art for UI display
+  publisher TEXT,                 -- show author / publisher name
   active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for existing databases (safe to run multiple times):
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS podcast_index_id TEXT;
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS artwork_url TEXT;
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS publisher TEXT;
 
 CREATE TABLE IF NOT EXISTS episodes (
   id SERIAL PRIMARY KEY,

@@ -1,59 +1,340 @@
-"""Vercel entrypoint: a single FastAPI app serving the frontend + all API routes."""
+"""Vercel entrypoint — single FastAPI app serving the frontend + all API routes."""
+import hashlib
 import os
 import sys
+import time
 from datetime import datetime
-from time import mktime
 from pathlib import Path
+from time import mktime
 
-import requests
 import feedparser
+import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-# Make local imports work both locally and on Vercel
 sys.path.append(str(Path(__file__).parent))
 
 from lib.db import (
     add_feed,
-    list_active_feeds,
+    ensure_feed,
     episode_exists,
-    save_episode,
     get_conn,
+    list_active_feeds,
+    save_episode,
 )
-from lib.transcripts import get_transcript
-from lib.summarizer import summarize
 from lib.notify import send_summary_email
+from lib.summarizer import summarize
+from lib.transcripts import get_transcript
 
-app = FastAPI(title="Podcast Summary Agent")
+app = FastAPI(title="PodcastAI")
 
-# The frontend at public/index.html and public/static/* is served
-# directly by Vercel as static files. Redirect / to it.
+PODCAST_INDEX_BASE = "https://api.podcastindex.org/api/1.0"
+OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "asomani@wp-labs.ai")
 
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _pi_headers() -> dict:
+    key    = os.environ.get("PODCAST_INDEX_KEY", "")
+    secret = os.environ.get("PODCAST_INDEX_SECRET", "")
+    ts     = str(int(time.time()))
+    auth   = hashlib.sha1(f"{key}{secret}{ts}".encode()).hexdigest()
+    return {
+        "X-Auth-Key":    key,
+        "X-Auth-Date":   ts,
+        "Authorization": f"Podcastindex {key}:{auth}",
+        "User-Agent":    "PodcastAI/2.0",
+        "Accept":        "application/json",
+    }
+
+
+def _rss_fetch(url: str) -> bytes:
+    resp = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=15,
+        verify=False,
+    )
+    resp.raise_for_status()
+    return resp.content
+
+
+# ── Static redirect ────────────────────────────────────────────────────────────
 
 @app.get("/")
 def home():
     return RedirectResponse(url="/index.html", status_code=302)
 
 
-# --- API ---
+# ── Podcast search ─────────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+def search_podcasts(q: str = Query(..., min_length=1)):
+    try:
+        r = requests.get(
+            f"{PODCAST_INDEX_BASE}/search/byterm",
+            params={"q": q, "max": 12},
+            headers=_pi_headers(),
+            timeout=10,
+        )
+        r.raise_for_status()
+        feeds_raw = r.json().get("feeds", [])
+
+        subscribed_ids: set[str] = set()
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT podcast_index_id FROM feeds WHERE active = TRUE AND podcast_index_id IS NOT NULL"
+                )
+                subscribed_ids = {row["podcast_index_id"] for row in cur.fetchall()}
+        except Exception:
+            pass
+
+        podcasts = []
+        for f in feeds_raw:
+            pid = str(f.get("id", ""))
+            podcasts.append({
+                "id":            pid,
+                "title":         f.get("title", ""),
+                "publisher":     f.get("author", ""),
+                "artwork":       f.get("image") or f.get("artwork", ""),
+                "rss_url":       f.get("url", ""),
+                "episode_count": f.get("episodeCount", 0),
+                "description":   (f.get("description") or "")[:200],
+                "subscribed":    pid in subscribed_ids,
+            })
+
+        return {"podcasts": podcasts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Episode list for a podcast ─────────────────────────────────────────────────
+
+@app.get("/api/podcast-episodes")
+def podcast_episodes(
+    podcast_index_id: str = Query(...),
+    rss_url: str = Query(...),
+):
+    try:
+        feed = feedparser.parse(_rss_fetch(rss_url))
+        entries = feed.entries[:10]
+
+        guids = [
+            e.get("id") or e.get("link") or e.get("title", "")
+            for e in entries
+        ]
+
+        cached: dict[str, dict] = {}
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM feeds WHERE podcast_index_id = %s OR rss_url = %s LIMIT 1",
+                    (podcast_index_id, rss_url),
+                )
+                row = cur.fetchone()
+                if row:
+                    cur.execute(
+                        """
+                        SELECT id, guid, summary, transcript_source
+                        FROM episodes
+                        WHERE feed_id = %s AND guid = ANY(%s)
+                        """,
+                        (row["id"], guids),
+                    )
+                    for r in cur.fetchall():
+                        cached[r["guid"]] = r
+        except Exception:
+            pass
+
+        episodes = []
+        for entry in entries:
+            guid = entry.get("id") or entry.get("link") or entry.get("title", "")
+            audio_url = ""
+            for enc in entry.get("enclosures", []):
+                if "audio" in enc.get("type", ""):
+                    audio_url = enc.get("href", "")
+                    break
+
+            pub = None
+            if entry.get("published_parsed"):
+                pub = datetime.fromtimestamp(mktime(entry.published_parsed)).isoformat()
+
+            ep = cached.get(guid)
+            episodes.append({
+                "guid":              guid,
+                "title":             entry.get("title", "Untitled"),
+                "published_at":      pub,
+                "audio_url":         audio_url,
+                "description":       (entry.get("summary") or entry.get("description") or "")[:500],
+                "duration":          entry.get("itunes_duration", ""),
+                "has_summary":       ep is not None,
+                "episode_id":        ep["id"] if ep else None,
+                "summary":           ep["summary"] if ep else None,
+                "transcript_source": ep["transcript_source"] if ep else None,
+            })
+
+        return {"episodes": episodes, "podcast_title": feed.feed.get("title", "")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── On-demand summary ──────────────────────────────────────────────────────────
+
+class SummarizeRequest(BaseModel):
+    podcast_index_id:    str = ""
+    rss_url:             str
+    podcast_title:       str
+    artwork_url:         str = ""
+    publisher:           str = ""
+    episode_guid:        str
+    episode_title:       str
+    episode_audio_url:   str = ""
+    episode_description: str = ""
+    episode_published_at: str | None = None
+
+
+@app.post("/api/summarize")
+def summarize_episode(req: SummarizeRequest):
+    try:
+        feed_id = ensure_feed(
+            req.rss_url,
+            req.podcast_title,
+            req.podcast_index_id,
+            req.artwork_url,
+            req.publisher,
+        )
+
+        # Check cache
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, summary, transcript_source FROM episodes WHERE feed_id = %s AND guid = %s",
+                (feed_id, req.episode_guid),
+            )
+            cached = cur.fetchone()
+
+        if cached and cached["summary"]:
+            return {
+                "episode_id": cached["id"],
+                "summary":    cached["summary"],
+                "source":     cached["transcript_source"],
+                "cached":     True,
+            }
+
+        # Generate
+        text, source = get_transcript(
+            req.podcast_title,
+            req.episode_title,
+            req.episode_description,
+            req.episode_audio_url,
+        )
+        if not text:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not extract a transcript for this episode. Try a different one.",
+            )
+
+        summary_text = summarize(req.podcast_title, req.episode_title, text)
+
+        pub = None
+        if req.episode_published_at:
+            try:
+                pub = datetime.fromisoformat(req.episode_published_at)
+            except ValueError:
+                pass
+
+        ep_id = save_episode(
+            feed_id,
+            req.episode_guid,
+            req.episode_title,
+            pub,
+            req.episode_audio_url,
+            summary_text,
+            source,
+            mark_emailed=False,
+        )
+
+        return {"episode_id": ep_id, "summary": summary_text, "source": source, "cached": False}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Email a stored summary ─────────────────────────────────────────────────────
+
+class EmailRequest(BaseModel):
+    episode_id: int
+
+
+@app.post("/api/email-summary")
+def email_episode_summary(req: EmailRequest):
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT e.title, e.summary, f.podcast_title, f.email
+                FROM episodes e
+                JOIN feeds f ON f.id = e.feed_id
+                WHERE e.id = %s
+                """,
+                (req.episode_id,),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Episode not found.")
+
+        send_summary_email(
+            row["email"] or OWNER_EMAIL,
+            row["podcast_title"],
+            row["title"],
+            row["summary"],
+        )
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE episodes SET emailed_at = NOW() WHERE id = %s",
+                (req.episode_id,),
+            )
+
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Subscription management ────────────────────────────────────────────────────
+
 class SubscribeRequest(BaseModel):
-    rss_url: str
-    email: str
+    rss_url:          str
+    email:            str = ""
+    podcast_index_id: str = ""
+    artwork_url:      str = ""
+    publisher:        str = ""
+    podcast_title:    str = ""
 
 
 @app.post("/api/subscribe")
 def subscribe(req: SubscribeRequest):
     try:
-        resp = requests.get(
+        email = req.email or OWNER_EMAIL
+        if req.podcast_title:
+            podcast_title = req.podcast_title
+        else:
+            feed = feedparser.parse(_rss_fetch(req.rss_url))
+            podcast_title = feed.feed.get("title", "Unknown Podcast")
+
+        feed_id = add_feed(
             req.rss_url,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10,
-            verify=False,
+            podcast_title,
+            email,
+            req.podcast_index_id,
+            req.artwork_url,
+            req.publisher,
         )
-        feed = feedparser.parse(resp.content)
-        podcast_title = feed.feed.get("title", "Unknown Podcast")
-        feed_id = add_feed(req.rss_url, podcast_title, req.email)
         return {"id": feed_id, "podcast_title": podcast_title}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -65,7 +346,8 @@ def feeds():
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT f.id, f.rss_url, f.podcast_title, f.email, f.created_at,
+                SELECT f.id, f.rss_url, f.podcast_title, f.email,
+                       f.podcast_index_id, f.artwork_url, f.publisher, f.created_at,
                        COUNT(e.id) AS episode_count
                 FROM feeds f
                 LEFT JOIN episodes e ON e.feed_id = f.id
@@ -125,29 +407,22 @@ def episodes(feed_id: int | None = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Cron ───────────────────────────────────────────────────────────────────────
+
 @app.get("/api/cron-check")
 def cron_check():
-    """Vercel Cron entry point: scan feeds, summarize new episodes, email them."""
     results = {"feeds_checked": 0, "new_episodes": 0, "errors": []}
-
     for feed_row in list_active_feeds():
         results["feeds_checked"] += 1
         try:
             _process_feed(feed_row, results)
         except Exception as e:
             results["errors"].append(f"feed {feed_row['id']}: {e}")
-
     return results
 
 
 def _process_feed(feed_row: dict, results: dict):
-    resp = requests.get(
-        feed_row["rss_url"],
-        headers={"User-Agent": "Mozilla/5.0"},
-        timeout=15,
-        verify=False,
-    )
-    feed = feedparser.parse(resp.content)
+    feed = feedparser.parse(_rss_fetch(feed_row["rss_url"]))
     podcast_title = feed.feed.get("title", feed_row["podcast_title"])
 
     for entry in feed.entries[:5]:
@@ -163,17 +438,18 @@ def _process_feed(feed_row: dict, results: dict):
                 audio_url = enc.get("href", "")
                 break
 
-        published_at = None
+        pub = None
         if entry.get("published_parsed"):
-            published_at = datetime.fromtimestamp(mktime(entry.published_parsed))
+            pub = datetime.fromtimestamp(mktime(entry.published_parsed))
 
-        text, source = get_transcript(podcast_title, title, description)
+        text, source = get_transcript(podcast_title, title, description, audio_url)
         if not text:
             continue
 
-        summary = summarize(podcast_title, title, text)
-        send_summary_email(feed_row["email"], podcast_title, title, summary)
+        summary_text = summarize(podcast_title, title, text)
+        send_summary_email(feed_row["email"], podcast_title, title, summary_text)
         save_episode(
-            feed_row["id"], guid, title, published_at, audio_url, summary, source
+            feed_row["id"], guid, title, pub, audio_url,
+            summary_text, source, mark_emailed=True,
         )
         results["new_episodes"] += 1
