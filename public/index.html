@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Podcast Summary Agent</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎙️ Podcast Summary Agent</h1>
+      <p>Subscribe to a podcast feed and get detailed summaries by email when new episodes drop.</p>
+    </header>
+
+    <section class="card">
+      <h2>Add a podcast</h2>
+      <div class="form-row">
+        <input type="text" id="rssUrl" placeholder="Podcast RSS feed URL" class="input" />
+      </div>
+      <div class="form-row">
+        <input type="email" id="email" placeholder="Email to send summaries to" class="input" />
+      </div>
+      <button id="subscribeBtn" onclick="subscribe()">Subscribe</button>
+      <div id="msg" class="msg hidden"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-header">
+        <h2>Your subscriptions</h2>
+        <button class="ghost" onclick="loadFeeds()">↻ Refresh</button>
+      </div>
+      <div id="feedList" class="list"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-header">
+        <h2>Recent summaries</h2>
+        <button class="ghost" onclick="loadEpisodes()">↻ Refresh</button>
+      </div>
+      <div id="episodeList" class="list"></div>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
