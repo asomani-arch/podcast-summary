@@ -11,7 +11,7 @@ from datetime import datetime
 from time import mktime
 
 import sys, os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.db import list_active_feeds, episode_exists, save_episode
 from lib.transcripts import get_transcript
 from lib.summarizer import summarize
