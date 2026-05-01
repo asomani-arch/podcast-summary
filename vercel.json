@@ -4,12 +4,5 @@
       "path": "/api/cron-check",
       "schedule": "0 13 * * *"
     }
-  ],
-  "functions": {
-    "api/cron-check.py": { "maxDuration": 300 }
-  },
-  "rewrites": [
-    { "source": "/", "destination": "/public/index.html" },
-    { "source": "/static/(.*)", "destination": "/public/static/$1" }
   ]
 }
