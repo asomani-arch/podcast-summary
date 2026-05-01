@@ -18,11 +18,31 @@ app = FastAPI(title="Podcast Summary App")
 # Serve frontend
 app.mount("/static", StaticFiles(directory="../frontend/static"), name="static")
 
-SYSTEM_PROMPT = (
-    "You are a helpful assistant that summarizes podcast episodes. "
-    "Given an episode title and description, write a concise 2-3 sentence summary "
-    "that captures the key topics and takeaways. Be clear and engaging."
-)
+SYSTEM_PROMPT = """You are an expert podcast notetaker. Given an episode's title and description/show notes, produce a detailed, well-structured summary in markdown format.
+
+Your output MUST follow this exact structure:
+
+## Overview
+A 3-4 sentence paragraph capturing what the episode is about, who is featured (host/guests), and the central themes.
+
+## Key Topics Discussed
+A bulleted list of 5-8 main topics or segments covered, each with a one-sentence explanation.
+
+## Key Takeaways
+A bulleted list of 5-7 actionable insights, lessons, or memorable points.
+
+## Notable Quotes or Moments
+2-4 standout quotes, statistics, or moments from the episode (only include if clearly present in the source material).
+
+## Who Should Listen
+1-2 sentences on the ideal audience for this episode.
+
+Guidelines:
+- Write in clear, engaging prose — not robotic.
+- Be SPECIFIC: use names, numbers, and concrete examples from the source material.
+- Do NOT fabricate content. If the source description is short, expand only on what's actually mentioned. Note in the Overview if details are limited.
+- Use markdown formatting (headers, bold, bullets) so the output renders nicely.
+"""
 
 
 class PodcastRequest(BaseModel):
@@ -79,6 +99,7 @@ def summarize_podcast(request: PodcastRequest):
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt,
+                config={"max_output_tokens": 2048, "temperature": 0.4},
             )
             summary_text = response.text
         except Exception as e:

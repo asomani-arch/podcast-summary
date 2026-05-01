@@ -48,10 +48,11 @@ function displayResults(data) {
   data.episodes.forEach((ep) => {
     const card = document.createElement("div");
     card.className = "episode-card";
+    const summaryHtml = window.marked ? marked.parse(ep.summary) : ep.summary;
     card.innerHTML = `
       <h3>${ep.title}</h3>
       <div class="episode-date">${ep.published}</div>
-      <div class="episode-summary">${ep.summary}</div>
+      <div class="episode-summary">${summaryHtml}</div>
     `;
     list.appendChild(card);
   });

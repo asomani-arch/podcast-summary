@@ -165,6 +165,31 @@ button:disabled {
 
 .episode-summary {
   font-size: 0.97rem;
-  line-height: 1.6;
-  color: #444;
+  line-height: 1.65;
+  color: #333;
 }
+
+.episode-summary h2 {
+  font-size: 1.05rem;
+  color: #6c63ff;
+  margin: 1.1rem 0 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid #eee;
+}
+
+.episode-summary h2:first-child { margin-top: 0.25rem; }
+
+.episode-summary ul {
+  padding-left: 1.25rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.episode-summary li {
+  margin-bottom: 0.4rem;
+}
+
+.episode-summary p {
+  margin-bottom: 0.6rem;
+}
+
+.episode-summary strong { color: #1a1a2e; }

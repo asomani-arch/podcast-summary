@@ -1,0 +1,7 @@
+feedparser
+requests
+google-genai
+psycopg[binary]
+resend
+markdown
+youtube-transcript-api
