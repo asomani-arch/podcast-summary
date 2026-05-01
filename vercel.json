@@ -4,5 +4,8 @@
       "path": "/api/cron-check",
       "schedule": "0 13 * * *"
     }
+  ],
+  "rewrites": [
+    { "source": "/", "destination": "/index.html" }
   ]
 }

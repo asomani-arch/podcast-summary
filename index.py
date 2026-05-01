@@ -8,8 +8,6 @@ from pathlib import Path
 import requests
 import feedparser
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Make local imports work both locally and on Vercel
@@ -28,15 +26,9 @@ from lib.notify import send_summary_email
 
 app = FastAPI(title="Podcast Summary Agent")
 
-# --- Static frontend ---
-PUBLIC_DIR = Path(__file__).parent / "public"
-if (PUBLIC_DIR / "static").exists():
-    app.mount("/static", StaticFiles(directory=str(PUBLIC_DIR / "static")), name="static")
-
-
-@app.get("/")
-def home():
-    return FileResponse(str(PUBLIC_DIR / "index.html"))
+# Note: the frontend at public/index.html and public/static/* is served
+# directly by Vercel as static files, so we don't mount them in FastAPI.
+# Locally, run with: uvicorn index:app and visit /index.html
 
 
 # --- API ---
