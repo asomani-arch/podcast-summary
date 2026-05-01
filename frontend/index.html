@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Podcast Summary</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎙️ Podcast Summary</h1>
+      <p>Enter a podcast RSS feed URL to get AI-powered summaries of recent episodes</p>
+    </header>
+
+    <div class="input-section">
+      <input
+        type="text"
+        id="rssUrl"
+        placeholder="Paste podcast RSS feed URL..."
+        class="rss-input"
+      />
+      <div class="options">
+        <label for="numEpisodes">Number of episodes:</label>
+        <select id="numEpisodes">
+          <option value="3">3</option>
+          <option value="5" selected>5</option>
+          <option value="10">10</option>
+        </select>
+      </div>
+      <button id="summarizeBtn" onclick="summarize()">Summarize</button>
+    </div>
+
+    <div id="loading" class="loading hidden">
+      <div class="spinner"></div>
+      <p>Fetching and summarizing episodes...</p>
+    </div>
+
+    <div id="error" class="error hidden"></div>
+
+    <div id="results" class="results hidden">
+      <h2 id="podcastTitle"></h2>
+      <div id="episodeList"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
