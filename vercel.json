@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/check",
-      "schedule": "0 */6 * * *"
+      "schedule": "0 13 * * *"
     }
   ],
   "functions": {
