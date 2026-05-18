@@ -16,18 +16,23 @@ def get_transcript(
     audio_url: str = "",
     episode_url: str = "",
 ) -> tuple[str, str]:
-    # 1. YouTube captions.
+    # 1. Official logged-in Colossus transcript, when a session cookie is configured.
+    colossus = _try_colossus_transcript(episode_url)
+    if colossus:
+        return colossus, "colossus"
+
+    # 2. YouTube captions.
     yt = _try_youtube(podcast_title, episode_title, description, episode_url)
     if yt:
         return yt, "youtube"
 
-    # 2. Direct audio transcription.
+    # 3. Direct audio transcription.
     if audio_url:
         audio_text, partial = _try_audio_gemini(audio_url)
         if audio_text:
             return audio_text, "audio_partial" if partial else "audio"
 
-    # 3. RSS show notes fallback.
+    # 4. RSS show notes fallback.
     clean = re.sub(r"<[^>]+>", "", description or "").strip()
     return clean, "shownotes"
 
@@ -87,7 +92,11 @@ def _fetch_page_text(url: str) -> str:
     if not url or not re.match(r"^https?://", url):
         return ""
     try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        cookie = os.getenv("COLOSSUS_COOKIE")
+        if cookie and "colossus.com" in url:
+            headers["Cookie"] = cookie
+        resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         return resp.text
     except Exception:
@@ -105,6 +114,43 @@ def _candidate_page_urls(url: str) -> list[str]:
         if not slug.startswith("the-"):
             candidates.append(f"{base}the-{slug}/")
     return candidates
+
+
+def _try_colossus_transcript(episode_url: str) -> str | None:
+    if not os.getenv("COLOSSUS_COOKIE"):
+        return None
+
+    for page_url in _candidate_page_urls(episode_url):
+        page_text = _fetch_page_text(page_url)
+        transcript = _extract_colossus_transcript(page_text)
+        if transcript:
+            return transcript
+    return None
+
+
+def _extract_colossus_transcript(page_text: str) -> str:
+    if not page_text:
+        return ""
+
+    start = page_text.find('<div class="transcript__content">')
+    end = page_text.find("</article>", start)
+    if start == -1 or end == -1:
+        return ""
+
+    html = page_text[start:end]
+    html = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
+    html = re.sub(r"<style\b[^>]*>.*?</style>", " ", html, flags=re.I | re.S)
+    html = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
+    html = re.sub(r"</p\s*>", "\n", html, flags=re.I)
+    text = unescape(re.sub(r"<[^>]+>", " ", html))
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s+", "\n", text).strip()
+
+    # Public Colossus pages expose only the intro plus a gate. Treat that as
+    # unavailable so the resolver continues to YouTube/audio.
+    if "content-gate-obscure" in html and len(text) < 5000:
+        return ""
+    return text if len(text) >= 2000 else ""
 
 
 def _fetch_youtube_transcript(video_id: str) -> str:

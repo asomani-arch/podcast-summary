@@ -618,6 +618,7 @@ function formatDuration(dur) {
 
 function sourceLabel(source) {
   const labels = {
+    colossus: 'Colossus transcript',
     youtube: 'YouTube captions',
     audio: 'audio transcript',
     audio_partial: 'partial audio transcript',

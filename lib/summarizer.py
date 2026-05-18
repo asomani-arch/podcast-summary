@@ -26,8 +26,9 @@ LENGTH_PROFILES = {
 }
 
 DEFAULT_SECTIONS = ["overview", "takeaways"]
-FULL_TRANSCRIPT_SOURCES = {"youtube", "audio"}
+FULL_TRANSCRIPT_SOURCES = {"colossus", "youtube", "audio"}
 SOURCE_LABELS = {
+    "colossus": "the Colossus transcript",
     "audio_partial": "a partial audio transcript",
     "shownotes": "RSS show notes",
 }

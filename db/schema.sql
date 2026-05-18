@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS episodes (
   published_at TIMESTAMPTZ,
   audio_url TEXT,
   summary TEXT,
-  transcript_source TEXT,         -- 'youtube' | 'audio' | 'audio_partial' | 'shownotes'
+  transcript_source TEXT,         -- 'colossus' | 'youtube' | 'audio' | 'audio_partial' | 'shownotes'
   emailed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(feed_id, guid)
