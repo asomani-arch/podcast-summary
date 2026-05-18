@@ -66,21 +66,47 @@ def _pi_headers() -> dict:
 
 @app.get("/api/_pi-debug")
 def pi_debug():
-    """Diagnostic — returns non-secret info about the PI auth setup so we can
-    distinguish missing-key vs bad-key vs clock-skew. Safe to expose: it does
-    NOT leak the key or secret, only their lengths + a 6-char prefix."""
-    key    = os.environ.get("PODCAST_INDEX_KEY", "")
-    secret = os.environ.get("PODCAST_INDEX_SECRET", "")
-    return {
+    """Diagnostic — returns non-secret info about the PI auth setup plus the
+    raw response from a live PI request, so we can distinguish missing-key vs
+    bad-key vs clock-skew vs format issue. Does NOT leak the key or secret."""
+    key    = os.environ.get("PODCAST_INDEX_KEY", "").strip()
+    secret = os.environ.get("PODCAST_INDEX_SECRET", "").strip()
+    out = {
         "key_present":          bool(key),
-        "key_length":            len(key),
-        "key_stripped_length":   len(key.strip()),
-        "key_prefix":            (key.strip()[:6] + "…") if key.strip() else "",
+        "key_stripped_length":  len(key),
+        "key_prefix":           (key[:6] + "…") if key else "",
         "secret_present":       bool(secret),
-        "secret_length":         len(secret),
-        "secret_stripped_length":len(secret.strip()),
+        "secret_stripped_length":len(secret),
         "server_unix_ts":       int(time.time()),
     }
+    if not key or not secret:
+        return out
+
+    ts   = str(int(time.time()))
+    auth = hashlib.sha1(f"{key}{secret}{ts}".encode()).hexdigest()
+    out["ts_used"]        = ts
+    out["auth_hash_prefix"] = auth[:8] + "…"
+
+    try:
+        r = requests.get(
+            f"{PODCAST_INDEX_BASE}/search/byterm",
+            params={"q": "test", "max": 1},
+            headers={
+                "X-Auth-Key":    key,
+                "X-Auth-Date":   ts,
+                "Authorization": auth,
+                "User-Agent":    "PodcastAI/3.0-debug",
+                "Accept":        "application/json",
+            },
+            timeout=10,
+        )
+        out["pi_status"]        = r.status_code
+        out["pi_response_body"] = r.text[:400]
+        out["pi_response_headers"] = dict(r.headers)
+    except Exception as e:
+        out["pi_error"] = str(e)
+
+    return out
 
 
 def _rss_fetch(url: str) -> bytes:
