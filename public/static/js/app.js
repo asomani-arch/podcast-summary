@@ -11,10 +11,7 @@ const state = {
 
 const SECTION_LABELS = {
   overview:   'Overview',
-  topics:     'Key topics',
-  takeaways:  'Takeaways',
-  quotes:     'Quotes',
-  audience:   'Who should listen',
+  takeaways:  'Key takeaways',
 };
 const ALL_SECTIONS = Object.keys(SECTION_LABELS);
 
@@ -222,6 +219,7 @@ async function summarizeEpisode(index, btn) {
       episode_title:       ep.title,
       episode_audio_url:   ep.audio_url || '',
       episode_description: ep.description || '',
+      episode_duration:    ep.duration || '',
       episode_published_at: ep.published_at || null,
     });
 
@@ -278,7 +276,7 @@ function showSummaryInPanel(episodeId, summary, source) {
   const html = window.marked ? marked.parse(summary || '') : (summary || '');
   document.getElementById('panelBody').innerHTML = `
     <div class="summary-content">${html}</div>
-    <p class="source-tag">Transcript source: ${esc(source || 'unknown')}</p>
+    <p class="source-tag">Transcript source: ${esc(sourceLabel(source))}</p>
   `;
   if (episodeId) {
     const emailBtn = document.getElementById('emailBtn');
@@ -469,7 +467,6 @@ function renderSubscriptions() {
   state.subscriptions.forEach(s => {
     const item = document.createElement('div');
     item.className = 'sub-item-wrap';
-    const sections = Array.isArray(s.sections) && s.sections.length ? s.sections : ALL_SECTIONS;
     const length = s.summary_length || 'standard';
     const freq = s.frequency_days || 1;
     const settingsOpen = state.expandedSettingsId === s.id;
@@ -491,7 +488,7 @@ function renderSubscriptions() {
         </button>
         <button class="btn-unsub" onclick="unsubscribeFeed(${s.id}, this)">Unsubscribe</button>
       </div>
-      ${settingsOpen ? renderFeedSettings(s, length, sections, freq) : ''}
+      ${settingsOpen ? renderFeedSettings(s, length, freq) : ''}
     `;
     list.appendChild(item);
   });
@@ -503,21 +500,12 @@ function frequencyLabel(days) {
   return `every ${days} day${days === 1 ? '' : 's'}`;
 }
 
-function renderFeedSettings(s, length, sections, freq) {
+function renderFeedSettings(s, length, freq) {
   const lengthOpts = Object.entries(LENGTH_LABELS).map(([v, label]) =>
     `<label class="seg-opt ${v === length ? 'seg-opt-on' : ''}">
        <input type="radio" name="length-${s.id}" value="${v}" ${v === length ? 'checked' : ''}
               onchange="saveFeedSettings(${s.id})" />
        ${esc(label)}
-     </label>`
-  ).join('');
-
-  const sectionOpts = ALL_SECTIONS.map(key =>
-    `<label class="chk-opt">
-       <input type="checkbox" name="sections-${s.id}" value="${key}"
-              ${sections.includes(key) ? 'checked' : ''}
-              onchange="saveFeedSettings(${s.id})" />
-       <span>${esc(SECTION_LABELS[key])}</span>
      </label>`
   ).join('');
 
@@ -530,10 +518,6 @@ function renderFeedSettings(s, length, sections, freq) {
       <div class="settings-group">
         <p class="settings-label">Length</p>
         <div class="seg-group">${lengthOpts}</div>
-      </div>
-      <div class="settings-group">
-        <p class="settings-label">Sections</p>
-        <div class="chk-group">${sectionOpts}</div>
       </div>
       <div class="settings-group">
         <p class="settings-label">Frequency</p>
@@ -552,16 +536,10 @@ function toggleFeedSettings(id) {
 
 async function saveFeedSettings(id) {
   const lenEl = document.querySelector(`input[name="length-${id}"]:checked`);
-  const sectionEls = document.querySelectorAll(`input[name="sections-${id}"]:checked`);
   const freqEl = document.querySelector(`select[name="freq-${id}"]`);
-  const sections = Array.from(sectionEls).map(e => e.value);
-  if (!sections.length) {
-    showToast('Pick at least one section', 'error');
-    return;
-  }
   const body = {
     summary_length: lenEl ? lenEl.value : undefined,
-    sections,
+    sections: ALL_SECTIONS,
     frequency_days: freqEl ? parseInt(freqEl.value, 10) : undefined,
   };
   const statusEl = document.getElementById(`settings-status-${id}`);
@@ -635,6 +613,16 @@ function formatDuration(dur) {
   }
   // Already formatted (e.g. "01:23:45")
   return String(dur);
+}
+
+function sourceLabel(source) {
+  const labels = {
+    youtube: 'YouTube captions',
+    audio: 'audio transcript',
+    audio_partial: 'partial audio transcript',
+    shownotes: 'RSS show notes',
+  };
+  return labels[source] || 'unknown';
 }
 
 function showSpinner(show) {

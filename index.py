@@ -28,7 +28,7 @@ from lib.db import (
     update_feed_settings,
 )
 from lib.notify import send_summary_email
-from lib.summarizer import summarize
+from lib.summarizer import strip_summary_marker, summarize, summary_is_current
 from lib.transcripts import get_transcript
 
 app = FastAPI(title="PodcastAI")
@@ -188,6 +188,7 @@ def podcast_episodes(
                 pub = datetime.fromtimestamp(mktime(entry.published_parsed)).isoformat()
 
             ep = cached.get(guid)
+            has_current_summary = bool(ep and summary_is_current(ep.get("summary")))
             episodes.append({
                 "guid":              guid,
                 "title":             entry.get("title", "Untitled"),
@@ -195,9 +196,9 @@ def podcast_episodes(
                 "audio_url":         audio_url,
                 "description":       (entry.get("summary") or entry.get("description") or "")[:500],
                 "duration":          entry.get("itunes_duration", ""),
-                "has_summary":       ep is not None,
-                "episode_id":        ep["id"] if ep else None,
-                "summary":           ep["summary"] if ep else None,
+                "has_summary":       has_current_summary,
+                "episode_id":        ep["id"] if has_current_summary else None,
+                "summary":           strip_summary_marker(ep["summary"]) if has_current_summary else None,
                 "transcript_source": ep["transcript_source"] if ep else None,
             })
 
@@ -218,6 +219,7 @@ class SummarizeRequest(BaseModel):
     episode_title:       str
     episode_audio_url:   str = ""
     episode_description: str = ""
+    episode_duration:    str = ""
     episode_published_at: str | None = None
 
 
@@ -255,10 +257,10 @@ def summarize_episode(req: SummarizeRequest):
             )
             cached = cur.fetchone()
 
-        if cached and cached["summary"]:
+        if cached and summary_is_current(cached["summary"]):
             return {
                 "episode_id": cached["id"],
-                "summary":    cached["summary"],
+                "summary":    strip_summary_marker(cached["summary"]),
                 "source":     cached["transcript_source"],
                 "cached":     True,
             }
@@ -281,6 +283,8 @@ def summarize_episode(req: SummarizeRequest):
             text,
             length=feed_settings["summary_length"],
             sections=feed_settings["sections"],
+            transcript_source=source,
+            episode_duration=req.episode_duration,
         )
 
         pub = None
@@ -301,7 +305,12 @@ def summarize_episode(req: SummarizeRequest):
             mark_emailed=False,
         )
 
-        return {"episode_id": ep_id, "summary": summary_text, "source": source, "cached": False}
+        return {
+            "episode_id": ep_id,
+            "summary": strip_summary_marker(summary_text),
+            "source": source,
+            "cached": False,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -336,7 +345,7 @@ def email_episode_summary(req: EmailRequest):
             row["email"] or OWNER_EMAIL,
             row["podcast_title"],
             row["title"],
-            row["summary"],
+            strip_summary_marker(row["summary"]),
         )
 
         with get_conn() as conn, conn.cursor() as cur:
@@ -473,6 +482,8 @@ def episodes(feed_id: int | None = None):
                 for k in ("published_at", "emailed_at", "created_at"):
                     if r.get(k):
                         r[k] = r[k].isoformat()
+                if r.get("summary"):
+                    r["summary"] = strip_summary_marker(r["summary"])
         return {"episodes": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -540,6 +551,7 @@ def _process_feed(feed_row: dict, results: dict):
 
         title = entry.get("title", "Untitled")
         description = entry.get("summary", entry.get("description", ""))
+        duration = entry.get("itunes_duration", "")
         audio_url = ""
         for enc in entry.get("enclosures", []):
             if "audio" in enc.get("type", ""):
@@ -554,8 +566,21 @@ def _process_feed(feed_row: dict, results: dict):
         if not text:
             continue
 
-        summary_text = summarize(podcast_title, title, text, length=length, sections=sections)
-        send_summary_email(feed_row["email"], podcast_title, title, summary_text)
+        summary_text = summarize(
+            podcast_title,
+            title,
+            text,
+            length=length,
+            sections=sections,
+            transcript_source=source,
+            episode_duration=duration,
+        )
+        send_summary_email(
+            feed_row["email"],
+            podcast_title,
+            title,
+            strip_summary_marker(summary_text),
+        )
         save_episode(
             feed_row["id"], guid, title, pub, audio_url,
             summary_text, source, mark_emailed=True,

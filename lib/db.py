@@ -8,7 +8,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 
-DEFAULT_SECTIONS = ["overview", "topics", "takeaways", "quotes", "audience"]
+DEFAULT_SECTIONS = ["overview", "takeaways"]
 VALID_SECTIONS = set(DEFAULT_SECTIONS)
 VALID_LENGTHS = {"short", "standard", "deep"}
 

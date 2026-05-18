@@ -1,9 +1,10 @@
-"""Transcript extraction: YouTube captions → RSS show notes → Gemini audio transcription."""
+"""Transcript extraction: YouTube captions -> Gemini audio transcription -> RSS show notes."""
 import os
 import re
 import tempfile
-import requests
 from urllib.parse import quote
+
+import requests
 from youtube_transcript_api import YouTubeTranscriptApi
 
 
@@ -13,22 +14,19 @@ def get_transcript(
     description: str = "",
     audio_url: str = "",
 ) -> tuple[str, str]:
-    # 1. YouTube captions
+    # 1. YouTube captions.
     yt = _try_youtube(podcast_title, episode_title)
     if yt:
         return yt, "youtube"
 
-    # 2. Rich show notes (>300 chars of real content)
-    clean = re.sub(r"<[^>]+>", "", description or "").strip()
-    if len(clean) > 300:
-        return clean, "shownotes"
-
-    # 3. Direct audio → Gemini transcription
+    # 2. Direct audio transcription.
     if audio_url:
-        audio_text = _try_audio_gemini(audio_url)
+        audio_text, partial = _try_audio_gemini(audio_url)
         if audio_text:
-            return audio_text, "audio"
+            return audio_text, "audio_partial" if partial else "audio"
 
+    # 3. RSS show notes fallback.
+    clean = re.sub(r"<[^>]+>", "", description or "").strip()
     return clean, "shownotes"
 
 
@@ -53,8 +51,12 @@ def _search_youtube(query: str) -> str | None:
         return None
 
 
-def _try_audio_gemini(audio_url: str) -> str:
-    """Download audio (up to 50 MB) and transcribe via Gemini 2.5 Flash."""
+def _try_audio_gemini(audio_url: str) -> tuple[str, bool]:
+    """Download audio (up to 50 MB by default) and transcribe via Gemini."""
+    try:
+        max_bytes = int(os.getenv("MAX_AUDIO_TRANSCRIPTION_BYTES", str(50 * 1024 * 1024)))
+    except ValueError:
+        max_bytes = 50 * 1024 * 1024
     try:
         from google import genai
 
@@ -73,22 +75,32 @@ def _try_audio_gemini(audio_url: str) -> str:
 
         tmp_path = None
         try:
+            partial = False
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
                 tmp_path = f.name
                 downloaded = 0
                 for chunk in resp.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    remaining = max_bytes - downloaded
+                    if remaining <= 0:
+                        partial = True
+                        break
+                    if len(chunk) > remaining:
+                        f.write(chunk[:remaining])
+                        downloaded += remaining
+                        partial = True
+                        break
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if downloaded >= 50 * 1024 * 1024:
-                        break
 
             client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
             uploaded = client.files.upload(path=tmp_path)
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=["Please transcribe this podcast audio completely and accurately:", uploaded],
+                contents=["Please transcribe the provided podcast audio accurately:", uploaded],
             )
-            return response.text or ""
+            return response.text or "", partial
         finally:
             if tmp_path:
                 try:
@@ -96,4 +108,4 @@ def _try_audio_gemini(audio_url: str) -> str:
                 except OSError:
                     pass
     except Exception:
-        return ""
+        return "", False

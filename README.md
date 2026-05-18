@@ -8,8 +8,8 @@ Subscribe to podcast RSS feeds and get detailed AI-generated summaries by email 
 - **API**: Vercel Serverless Functions in `api/` (Python)
 - **Database**: Vercel Postgres (`feeds`, `episodes`)
 - **Cron**: Vercel Cron triggers `/api/cron/check` every 6h
-- **Transcripts**: YouTube auto-captions (preferred) → RSS show notes (fallback)
-- **Summaries**: Gemini 2.5 Flash with structured-notes prompt
+- **Transcripts**: YouTube auto-captions (preferred) -> Gemini audio transcription -> RSS show notes fallback
+- **Summaries**: Gemini 2.5 Flash private-equity newsletter brief with Overview + Key Takeaways
 - **Email**: Resend
 
 ## Project layout
