@@ -1,8 +1,6 @@
 """Vercel entrypoint — single FastAPI app serving the frontend + all API routes."""
-import hashlib
 import os
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from time import mktime
@@ -35,83 +33,11 @@ from lib.transcripts import get_transcript
 
 app = FastAPI(title="PodcastAI")
 
-PODCAST_INDEX_BASE = "https://api.podcastindex.org/api/1.0"
+ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "asomani@wp-labs.ai")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _pi_headers() -> dict:
-    # .strip() — pasting keys into Vercel env vars sometimes adds a trailing newline
-    # which breaks the SHA1 signature without breaking the X-Auth-Key check.
-    key    = os.environ.get("PODCAST_INDEX_KEY", "").strip()
-    secret = os.environ.get("PODCAST_INDEX_SECRET", "").strip()
-    if not key or not secret:
-        raise HTTPException(
-            status_code=500,
-            detail="PODCAST_INDEX_KEY / PODCAST_INDEX_SECRET not configured.",
-        )
-    ts   = str(int(time.time()))
-    auth = hashlib.sha1(f"{key}{secret}{ts}".encode()).hexdigest()
-    # Per https://podcastindex-org.github.io/docs-api the Authorization header
-    # is just the raw SHA1 hex of key+secret+timestamp — no "Podcastindex …" prefix.
-    return {
-        "X-Auth-Key":    key,
-        "X-Auth-Date":   ts,
-        "Authorization": auth,
-        "User-Agent":    "PodcastAI/3.0",
-        "Accept":        "application/json",
-    }
-
-
-@app.get("/api/_pi-debug")
-def pi_debug():
-    """Diagnostic — returns non-secret info about the PI auth setup plus the
-    raw response from a live PI request, so we can distinguish missing-key vs
-    bad-key vs clock-skew vs format issue. Does NOT leak the key or secret."""
-    key    = os.environ.get("PODCAST_INDEX_KEY", "").strip()
-    secret = os.environ.get("PODCAST_INDEX_SECRET", "").strip()
-    out = {
-        "key_present":          bool(key),
-        "key_stripped_length":  len(key),
-        "key_prefix":           (key[:6] + "…") if key else "",
-        "key_is_pure_alnum":    key.isalnum() if key else False,
-        "secret_present":       bool(secret),
-        "secret_stripped_length":len(secret),
-        "secret_is_pure_alnum": secret.isalnum() if secret else False,
-        "secret_codepoint_max": max((ord(c) for c in secret), default=0),
-        "secret_byte_length":   len(secret.encode("utf-8")),
-        "server_unix_ts":       int(time.time()),
-    }
-    if not key or not secret:
-        return out
-
-    ts   = str(int(time.time()))
-    auth = hashlib.sha1(f"{key}{secret}{ts}".encode()).hexdigest()
-    out["ts_used"]        = ts
-    out["auth_hash_prefix"] = auth[:8] + "…"
-
-    try:
-        r = requests.get(
-            f"{PODCAST_INDEX_BASE}/search/byterm",
-            params={"q": "test", "max": 1},
-            headers={
-                "X-Auth-Key":    key,
-                "X-Auth-Date":   ts,
-                "Authorization": auth,
-                "User-Agent":    "PodcastAI/3.0-debug",
-                "Accept":        "application/json",
-            },
-            timeout=10,
-        )
-        out["pi_status"]        = r.status_code
-        out["pi_response_body"] = r.text[:400]
-        out["pi_response_headers"] = dict(r.headers)
-    except Exception as e:
-        out["pi_error"] = str(e)
-
-    return out
-
 
 def _rss_fetch(url: str) -> bytes:
     resp = requests.get(
@@ -145,16 +71,26 @@ def home():
 
 @app.get("/api/search")
 def search_podcasts(q: str = Query(..., min_length=1)):
+    """Search podcasts via the (unauthenticated) Apple iTunes Search API.
+    Returns title / publisher / artwork / RSS feed URL — the same shape the
+    rest of the app already consumes for Podcast Index results."""
     try:
         r = requests.get(
-            f"{PODCAST_INDEX_BASE}/search/byterm",
-            params={"q": q, "max": 12},
-            headers=_pi_headers(),
+            ITUNES_SEARCH_URL,
+            params={
+                "term":   q,
+                "media":  "podcast",
+                "entity": "podcast",
+                "limit":  12,
+            },
+            headers={"User-Agent": "PodcastAI/3.0"},
             timeout=10,
         )
         r.raise_for_status()
-        feeds_raw = r.json().get("feeds", [])
+        results = r.json().get("results", [])
 
+        # The `podcast_index_id` column doubles as a generic external-id store;
+        # for iTunes results we use `collectionId` (Apple's podcast id).
         subscribed_ids: set[str] = set()
         try:
             with get_conn() as conn, conn.cursor() as cur:
@@ -166,16 +102,25 @@ def search_podcasts(q: str = Query(..., min_length=1)):
             pass
 
         podcasts = []
-        for f in feeds_raw:
-            pid = str(f.get("id", ""))
+        for f in results:
+            pid = str(f.get("collectionId", "") or f.get("trackId", ""))
+            feed_url = f.get("feedUrl", "")
+            if not feed_url:
+                continue  # podcast without a public feed isn't useful to us
+            artwork = (
+                f.get("artworkUrl600")
+                or f.get("artworkUrl100")
+                or f.get("artworkUrl60")
+                or ""
+            )
             podcasts.append({
                 "id":            pid,
-                "title":         f.get("title", ""),
-                "publisher":     f.get("author", ""),
-                "artwork":       f.get("image") or f.get("artwork", ""),
-                "rss_url":       f.get("url", ""),
-                "episode_count": f.get("episodeCount", 0),
-                "description":   (f.get("description") or "")[:200],
+                "title":         f.get("collectionName") or f.get("trackName") or "",
+                "publisher":     f.get("artistName", ""),
+                "artwork":       artwork,
+                "rss_url":       feed_url,
+                "episode_count": f.get("trackCount", 0),
+                "description":   f.get("primaryGenreName", "") or "",
                 "subscribed":    pid in subscribed_ids,
             })
 

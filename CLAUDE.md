@@ -22,6 +22,7 @@ A web app + cron-driven agent that watches subscribed podcast RSS feeds and emai
 | Database | Neon Postgres (via Vercel Marketplace) | `POSTGRES_URL` injected by integration |
 | LLM | Gemini 2.5 Flash (`google-genai` SDK) | User has paid account |
 | Transcripts | Hybrid: YouTube auto-captions → RSS show notes fallback | `youtube-transcript-api` |
+| Podcast search | Apple iTunes Search API | No auth required; returns title / publisher / artwork / feedUrl |
 | Email | Resend | `onboarding@resend.dev` sender; only delivers to verified address until custom domain added |
 | Cron | Vercel Cron, daily at 13:00 UTC | `0 13 * * *` |
 
@@ -62,6 +63,10 @@ requirements.txt      Python deps
 | `RESEND_API_KEY` | Manually set |
 | `RESEND_FROM` | Manually set, default `Podcast Summary <onboarding@resend.dev>` |
 | `POSTGRES_URL`, `DATABASE_URL`, etc. | Auto-injected by Neon integration |
+
+> `PODCAST_INDEX_KEY` / `PODCAST_INDEX_SECRET` were used by v2's search backend.
+> Search now uses the unauthenticated iTunes Search API, so these vars are unused
+> and can be deleted from Vercel — they aren't read anywhere in the code.
 
 ## Common tasks
 
