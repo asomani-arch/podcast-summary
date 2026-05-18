@@ -6,3 +6,4 @@ venv/
 
 .vercel
 .env*.local
+.claude/

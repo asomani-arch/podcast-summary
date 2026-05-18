@@ -6,7 +6,31 @@ const state = {
   panelEpisodeId: null,
   subscriptions: [],
   trayOpen: false,
+  expandedSettingsId: null,
 };
+
+const SECTION_LABELS = {
+  overview:   'Overview',
+  topics:     'Key topics',
+  takeaways:  'Takeaways',
+  quotes:     'Quotes',
+  audience:   'Who should listen',
+};
+const ALL_SECTIONS = Object.keys(SECTION_LABELS);
+
+const LENGTH_LABELS = {
+  short:    'Short',
+  standard: 'Standard',
+  deep:     'Deep dive',
+};
+
+const FREQUENCY_OPTIONS = [
+  { value: 1,  label: 'Daily' },
+  { value: 3,  label: 'Every 3 days' },
+  { value: 7,  label: 'Weekly' },
+  { value: 14, label: 'Fortnightly' },
+  { value: 30, label: 'Monthly' },
+];
 
 /* ── INIT ──────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
@@ -364,9 +388,11 @@ function toggleSubsTray() {
     tray.classList.add('open');
     backdrop.classList.remove('hidden');
     loadSubscriptions();
+    loadStatus();
   } else {
     tray.classList.remove('open');
     backdrop.classList.add('hidden');
+    state.expandedSettingsId = null;
   }
 }
 
@@ -379,6 +405,60 @@ async function loadSubscriptions() {
   } catch (_) {}
 }
 
+async function loadStatus() {
+  const el = document.getElementById('trayStatus');
+  try {
+    const data = await api('/api/status');
+    renderStatus(el, data.last_run);
+  } catch (e) {
+    el.classList.remove('hidden');
+    el.innerHTML = `<p class="status-line status-error">Couldn't load status — ${esc(e.message)}</p>`;
+  }
+}
+
+function renderStatus(el, run) {
+  if (!run) {
+    el.classList.remove('hidden');
+    el.innerHTML = '<p class="status-line status-muted">No cron runs recorded yet.</p>';
+    return;
+  }
+  el.classList.remove('hidden');
+  const when = new Date(run.started_at);
+  const relative = relativeTime(when);
+  const errs = Array.isArray(run.errors) ? run.errors : [];
+  const checked = run.feeds_checked || 0;
+  const skipped = run.feeds_skipped || 0;
+  const newEp   = run.new_episodes || 0;
+  const stateClass = errs.length ? 'status-error' : (run.ok ? 'status-ok' : 'status-error');
+  const dot = `<span class="status-dot ${stateClass}"></span>`;
+  const summary = errs.length
+    ? `Last check ${esc(relative)} — ${errs.length} error${errs.length === 1 ? '' : 's'}`
+    : `Last check ${esc(relative)} · ${checked} checked · ${newEp} new`;
+  const detail = `${checked} checked, ${skipped} skipped, ${newEp} new episode${newEp === 1 ? '' : 's'}`;
+  const errList = errs.length
+    ? `<ul class="status-errs">${errs.slice(0, 3).map(e => `<li>${esc(e)}</li>`).join('')}${
+        errs.length > 3 ? `<li class="status-more">+${errs.length - 3} more</li>` : ''
+      }</ul>`
+    : '';
+  el.innerHTML = `
+    <div class="status-row">${dot}<span class="status-line">${summary}</span></div>
+    ${errs.length ? '' : `<p class="status-detail">${esc(detail)}</p>`}
+    ${errList}
+  `;
+}
+
+function relativeTime(when) {
+  const diffMs = Date.now() - when.getTime();
+  const mins  = Math.round(diffMs / 60000);
+  if (mins < 1)  return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs  = Math.round(mins / 60);
+  if (hrs < 24)  return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 14) return `${days}d ago`;
+  return when.toLocaleDateString();
+}
+
 function renderSubscriptions() {
   const list = document.getElementById('subsList');
   if (!state.subscriptions.length) {
@@ -388,19 +468,120 @@ function renderSubscriptions() {
   list.innerHTML = '';
   state.subscriptions.forEach(s => {
     const item = document.createElement('div');
-    item.className = 'sub-item';
+    item.className = 'sub-item-wrap';
+    const sections = Array.isArray(s.sections) && s.sections.length ? s.sections : ALL_SECTIONS;
+    const length = s.summary_length || 'standard';
+    const freq = s.frequency_days || 1;
+    const settingsOpen = state.expandedSettingsId === s.id;
+
     item.innerHTML = `
-      ${s.artwork_url
-        ? `<img class="sub-artwork" src="${esc(s.artwork_url)}" alt="" />`
-        : '<div class="sub-artwork-placeholder"></div>'}
-      <div class="sub-info">
-        <p class="sub-title">${esc(s.podcast_title || 'Untitled')}</p>
-        <p class="sub-meta">${s.episode_count || 0} episodes summarized</p>
+      <div class="sub-item">
+        ${s.artwork_url
+          ? `<img class="sub-artwork" src="${esc(s.artwork_url)}" alt="" />`
+          : '<div class="sub-artwork-placeholder"></div>'}
+        <div class="sub-info">
+          <p class="sub-title">${esc(s.podcast_title || 'Untitled')}</p>
+          <p class="sub-meta">${s.episode_count || 0} summarized · ${esc(LENGTH_LABELS[length] || length)} · ${esc(frequencyLabel(freq))}</p>
+        </div>
+        <button class="btn-gear" title="Customize summaries" onclick="toggleFeedSettings(${s.id})" aria-expanded="${settingsOpen}">
+          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="8" cy="8" r="2.4" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8 3.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="btn-unsub" onclick="unsubscribeFeed(${s.id}, this)">Unsubscribe</button>
       </div>
-      <button class="btn-unsub" onclick="unsubscribeFeed(${s.id}, this)">Unsubscribe</button>
+      ${settingsOpen ? renderFeedSettings(s, length, sections, freq) : ''}
     `;
     list.appendChild(item);
   });
+}
+
+function frequencyLabel(days) {
+  const known = FREQUENCY_OPTIONS.find(o => o.value === days);
+  if (known) return known.label.toLowerCase();
+  return `every ${days} day${days === 1 ? '' : 's'}`;
+}
+
+function renderFeedSettings(s, length, sections, freq) {
+  const lengthOpts = Object.entries(LENGTH_LABELS).map(([v, label]) =>
+    `<label class="seg-opt ${v === length ? 'seg-opt-on' : ''}">
+       <input type="radio" name="length-${s.id}" value="${v}" ${v === length ? 'checked' : ''}
+              onchange="saveFeedSettings(${s.id})" />
+       ${esc(label)}
+     </label>`
+  ).join('');
+
+  const sectionOpts = ALL_SECTIONS.map(key =>
+    `<label class="chk-opt">
+       <input type="checkbox" name="sections-${s.id}" value="${key}"
+              ${sections.includes(key) ? 'checked' : ''}
+              onchange="saveFeedSettings(${s.id})" />
+       <span>${esc(SECTION_LABELS[key])}</span>
+     </label>`
+  ).join('');
+
+  const freqOpts = FREQUENCY_OPTIONS.map(o =>
+    `<option value="${o.value}" ${o.value === freq ? 'selected' : ''}>${esc(o.label)}</option>`
+  ).join('');
+
+  return `
+    <div class="sub-settings" id="sub-settings-${s.id}">
+      <div class="settings-group">
+        <p class="settings-label">Length</p>
+        <div class="seg-group">${lengthOpts}</div>
+      </div>
+      <div class="settings-group">
+        <p class="settings-label">Sections</p>
+        <div class="chk-group">${sectionOpts}</div>
+      </div>
+      <div class="settings-group">
+        <p class="settings-label">Frequency</p>
+        <select class="settings-select" name="freq-${s.id}" onchange="saveFeedSettings(${s.id})">${freqOpts}</select>
+        <p class="settings-hint">Hobby cron runs daily. Frequency gates whether this feed is processed each tick.</p>
+      </div>
+      <p class="settings-status" id="settings-status-${s.id}"></p>
+    </div>
+  `;
+}
+
+function toggleFeedSettings(id) {
+  state.expandedSettingsId = state.expandedSettingsId === id ? null : id;
+  renderSubscriptions();
+}
+
+async function saveFeedSettings(id) {
+  const lenEl = document.querySelector(`input[name="length-${id}"]:checked`);
+  const sectionEls = document.querySelectorAll(`input[name="sections-${id}"]:checked`);
+  const freqEl = document.querySelector(`select[name="freq-${id}"]`);
+  const sections = Array.from(sectionEls).map(e => e.value);
+  if (!sections.length) {
+    showToast('Pick at least one section', 'error');
+    return;
+  }
+  const body = {
+    summary_length: lenEl ? lenEl.value : undefined,
+    sections,
+    frequency_days: freqEl ? parseInt(freqEl.value, 10) : undefined,
+  };
+  const statusEl = document.getElementById(`settings-status-${id}`);
+  if (statusEl) statusEl.textContent = 'Saving…';
+  try {
+    const data = await api(`/api/feeds/${id}`, 'PATCH', body);
+    // Update local copy without re-rendering (keeps the open settings panel intact)
+    const idx = state.subscriptions.findIndex(s => s.id === id);
+    if (idx >= 0 && data.feed) state.subscriptions[idx] = { ...state.subscriptions[idx], ...data.feed };
+    if (statusEl) statusEl.textContent = '✓ Saved';
+    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1600);
+    // Refresh the sub-item meta line (length / frequency) without collapsing settings
+    const meta = document.querySelector(`#sub-settings-${id}`)?.previousElementSibling?.querySelector('.sub-meta');
+    if (meta && data.feed) {
+      const freqLabel = frequencyLabel(data.feed.frequency_days || 1);
+      meta.textContent = `${data.feed.episode_count ?? state.subscriptions[idx]?.episode_count ?? 0} summarized · ${LENGTH_LABELS[data.feed.summary_length] || data.feed.summary_length} · ${freqLabel}`;
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Failed — ' + e.message;
+  }
 }
 
 async function unsubscribeFeed(id, btn) {

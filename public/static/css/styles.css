@@ -911,6 +911,207 @@ button { cursor: pointer; font-family: var(--font); }
   color: var(--text-3);
 }
 
+/* ── TRAY STATUS ─────────────────────────────────────── */
+
+.tray-status {
+  padding: 0.75rem 1.25rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+
+.status-dot.status-ok    { background: var(--success); box-shadow: 0 0 0 3px rgba(34,197,94,0.15); }
+.status-dot.status-error { background: var(--danger);  box-shadow: 0 0 0 3px rgba(239,68,68,0.15); }
+
+.status-line {
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.status-line.status-muted { color: var(--text-3); }
+.status-line.status-error { color: var(--danger); }
+
+.status-detail {
+  font-size: 0.72rem;
+  color: var(--text-3);
+  margin-top: 0.25rem;
+  margin-left: 1.05rem;
+}
+
+.status-errs {
+  list-style: none;
+  margin-top: 0.45rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.status-errs li {
+  font-size: 0.72rem;
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  border-radius: var(--radius-xs);
+  padding: 0.3rem 0.5rem;
+  word-break: break-word;
+}
+
+.status-errs .status-more {
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-style: italic;
+}
+
+/* ── SUBSCRIPTION SETTINGS ───────────────────────────── */
+
+.sub-item-wrap {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+/* sub-item inside wrap loses its own border / background */
+.sub-item-wrap > .sub-item {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.btn-gear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: transparent;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-xs);
+  color: var(--text-2);
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.btn-gear:hover { color: var(--accent); border-color: rgba(245, 158, 11, 0.4); background: var(--accent-dim); }
+.btn-gear[aria-expanded="true"] { color: var(--accent); border-color: rgba(245, 158, 11, 0.5); background: var(--accent-dim); }
+.btn-gear svg { width: 14px; height: 14px; }
+
+.sub-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.85rem 0.85rem 0.95rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.settings-group { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.settings-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+
+.seg-group {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-2);
+  padding: 3px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+}
+
+.seg-opt {
+  flex: 1;
+  text-align: center;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-2);
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.seg-opt input { display: none; }
+.seg-opt:hover { color: var(--text); }
+.seg-opt-on { background: var(--accent); color: #000; font-weight: 600; }
+.seg-opt-on:hover { color: #000; }
+
+.chk-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem 0.6rem;
+}
+
+.chk-opt {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.chk-opt input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.settings-select {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  padding: 0.45rem 0.6rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.settings-select:focus { border-color: var(--accent); }
+
+.settings-hint {
+  font-size: 0.7rem;
+  color: var(--text-3);
+  line-height: 1.4;
+  margin-top: 0.15rem;
+}
+
+.settings-status {
+  font-size: 0.72rem;
+  color: var(--success);
+  text-align: right;
+  min-height: 1em;
+  margin: 0;
+}
+
 /* ── TOAST ───────────────────────────────────────────── */
 
 .toast {

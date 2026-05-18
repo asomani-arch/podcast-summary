@@ -1,5 +1,6 @@
 -- Run once against your Vercel Postgres database to create tables.
 -- v2 migration: add podcast_index_id, artwork_url, publisher to feeds.
+-- v3 migration: add per-feed customization + cron_runs.
 
 CREATE TABLE IF NOT EXISTS feeds (
   id SERIAL PRIMARY KEY,
@@ -10,13 +11,22 @@ CREATE TABLE IF NOT EXISTS feeds (
   artwork_url TEXT,               -- cover art for UI display
   publisher TEXT,                 -- show author / publisher name
   active BOOLEAN DEFAULT TRUE,
+  -- v3: per-feed customization
+  summary_length TEXT DEFAULT 'standard',   -- 'short' | 'standard' | 'deep'
+  sections TEXT[] DEFAULT ARRAY['overview','topics','takeaways','quotes','audience'],
+  frequency_days INT DEFAULT 1,             -- minimum days between deliveries
+  last_delivered_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Migration for existing databases (safe to run multiple times):
+-- Migrations for existing databases (safe to run multiple times):
 ALTER TABLE feeds ADD COLUMN IF NOT EXISTS podcast_index_id TEXT;
 ALTER TABLE feeds ADD COLUMN IF NOT EXISTS artwork_url TEXT;
 ALTER TABLE feeds ADD COLUMN IF NOT EXISTS publisher TEXT;
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS summary_length TEXT DEFAULT 'standard';
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS sections TEXT[] DEFAULT ARRAY['overview','topics','takeaways','quotes','audience'];
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS frequency_days INT DEFAULT 1;
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS last_delivered_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS episodes (
   id SERIAL PRIMARY KEY,
@@ -34,3 +44,17 @@ CREATE TABLE IF NOT EXISTS episodes (
 
 CREATE INDEX IF NOT EXISTS idx_episodes_feed ON episodes(feed_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_emailed ON episodes(emailed_at);
+
+-- v3: persisted cron run log so the UI can show last-run status + errors.
+CREATE TABLE IF NOT EXISTS cron_runs (
+  id SERIAL PRIMARY KEY,
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  feeds_checked INT NOT NULL DEFAULT 0,
+  feeds_skipped INT NOT NULL DEFAULT 0,
+  new_episodes INT NOT NULL DEFAULT 0,
+  errors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ok BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cron_runs_started ON cron_runs(started_at DESC);

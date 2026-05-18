@@ -16,12 +16,18 @@ from pydantic import BaseModel
 sys.path.append(str(Path(__file__).parent))
 
 from lib.db import (
+    DEFAULT_SECTIONS,
     add_feed,
     ensure_feed,
     episode_exists,
+    feed_due_for_check,
     get_conn,
+    get_recent_cron_runs,
     list_active_feeds,
+    mark_feed_delivered,
+    record_cron_run,
     save_episode,
+    update_feed_settings,
 )
 from lib.notify import send_summary_email
 from lib.summarizer import summarize
@@ -58,6 +64,16 @@ def _rss_fetch(url: str) -> bytes:
     )
     resp.raise_for_status()
     return resp.content
+
+
+def _serialize_feed_row(r: dict) -> dict:
+    out = dict(r)
+    for k in ("created_at", "last_delivered_at"):
+        if out.get(k):
+            out[k] = out[k].isoformat()
+    if out.get("sections") is None:
+        out["sections"] = list(DEFAULT_SECTIONS)
+    return out
 
 
 # ── Static redirect ────────────────────────────────────────────────────────────
@@ -206,7 +222,22 @@ def summarize_episode(req: SummarizeRequest):
             req.publisher,
         )
 
-        # Check cache
+        # Look up this feed's customization knobs so on-demand summaries match
+        # what cron-driven summaries would produce.
+        feed_settings = {"summary_length": "standard", "sections": list(DEFAULT_SECTIONS)}
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT summary_length, sections FROM feeds WHERE id = %s",
+                    (feed_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    feed_settings["summary_length"] = row.get("summary_length") or "standard"
+                    feed_settings["sections"] = row.get("sections") or list(DEFAULT_SECTIONS)
+        except Exception:
+            pass
+
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT id, summary, transcript_source FROM episodes WHERE feed_id = %s AND guid = %s",
@@ -222,7 +253,6 @@ def summarize_episode(req: SummarizeRequest):
                 "cached":     True,
             }
 
-        # Generate
         text, source = get_transcript(
             req.podcast_title,
             req.episode_title,
@@ -235,7 +265,13 @@ def summarize_episode(req: SummarizeRequest):
                 detail="Could not extract a transcript for this episode. Try a different one.",
             )
 
-        summary_text = summarize(req.podcast_title, req.episode_title, text)
+        summary_text = summarize(
+            req.podcast_title,
+            req.episode_title,
+            text,
+            length=feed_settings["summary_length"],
+            sections=feed_settings["sections"],
+        )
 
         pub = None
         if req.episode_published_at:
@@ -347,7 +383,9 @@ def feeds():
             cur.execute(
                 """
                 SELECT f.id, f.rss_url, f.podcast_title, f.email,
-                       f.podcast_index_id, f.artwork_url, f.publisher, f.created_at,
+                       f.podcast_index_id, f.artwork_url, f.publisher,
+                       f.summary_length, f.sections, f.frequency_days,
+                       f.last_delivered_at, f.created_at,
                        COUNT(e.id) AS episode_count
                 FROM feeds f
                 LEFT JOIN episodes e ON e.feed_id = f.id
@@ -356,10 +394,7 @@ def feeds():
                 ORDER BY f.created_at DESC
                 """
             )
-            rows = cur.fetchall()
-            for r in rows:
-                if r.get("created_at"):
-                    r["created_at"] = r["created_at"].isoformat()
+            rows = [_serialize_feed_row(r) for r in cur.fetchall()]
         return {"feeds": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -371,6 +406,32 @@ def unsubscribe(id: int = Query(...)):
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute("UPDATE feeds SET active = FALSE WHERE id = %s", (id,))
         return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class FeedSettingsRequest(BaseModel):
+    summary_length: str | None = None
+    sections:       list[str] | None = None
+    frequency_days: int | None = None
+
+
+@app.patch("/api/feeds/{feed_id}")
+def update_feed(feed_id: int, req: FeedSettingsRequest):
+    try:
+        row = update_feed_settings(
+            feed_id,
+            summary_length=req.summary_length,
+            sections=req.sections,
+            frequency_days=req.frequency_days,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Feed not found.")
+        return {"feed": _serialize_feed_row(row)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -407,24 +468,61 @@ def episodes(feed_id: int | None = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Status (recent cron runs) ──────────────────────────────────────────────────
+
+@app.get("/api/status")
+def status():
+    try:
+        runs = get_recent_cron_runs(limit=5)
+        last = runs[0] if runs else None
+        return {"last_run": last, "recent_runs": runs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Cron ───────────────────────────────────────────────────────────────────────
 
 @app.get("/api/cron-check")
 def cron_check():
-    results = {"feeds_checked": 0, "new_episodes": 0, "errors": []}
+    started_at = datetime.utcnow()
+    results = {
+        "feeds_checked": 0,
+        "feeds_skipped": 0,
+        "new_episodes":  0,
+        "errors":        [],
+    }
     for feed_row in list_active_feeds():
+        if not feed_due_for_check(feed_row):
+            results["feeds_skipped"] += 1
+            continue
         results["feeds_checked"] += 1
         try:
             _process_feed(feed_row, results)
         except Exception as e:
-            results["errors"].append(f"feed {feed_row['id']}: {e}")
+            results["errors"].append(f"feed {feed_row['id']} ({feed_row.get('podcast_title','?')}): {e}")
+
+    try:
+        run_id = record_cron_run(
+            started_at,
+            feeds_checked=results["feeds_checked"],
+            feeds_skipped=results["feeds_skipped"],
+            new_episodes=results["new_episodes"],
+            errors=results["errors"],
+        )
+        results["run_id"] = run_id
+    except Exception as e:
+        results["errors"].append(f"cron-log: {e}")
+
     return results
 
 
 def _process_feed(feed_row: dict, results: dict):
     feed = feedparser.parse(_rss_fetch(feed_row["rss_url"]))
     podcast_title = feed.feed.get("title", feed_row["podcast_title"])
+    length = feed_row.get("summary_length") or "standard"
+    sections = feed_row.get("sections") or list(DEFAULT_SECTIONS)
 
+    delivered_any = False
     for entry in feed.entries[:5]:
         guid = entry.get("id") or entry.get("link") or entry.get("title")
         if not guid or episode_exists(feed_row["id"], guid):
@@ -446,10 +544,14 @@ def _process_feed(feed_row: dict, results: dict):
         if not text:
             continue
 
-        summary_text = summarize(podcast_title, title, text)
+        summary_text = summarize(podcast_title, title, text, length=length, sections=sections)
         send_summary_email(feed_row["email"], podcast_title, title, summary_text)
         save_episode(
             feed_row["id"], guid, title, pub, audio_url,
             summary_text, source, mark_emailed=True,
         )
         results["new_episodes"] += 1
+        delivered_any = True
+
+    if delivered_any:
+        mark_feed_delivered(feed_row["id"])

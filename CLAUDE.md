@@ -70,14 +70,42 @@ requirements.txt      Python deps
 - **Apply schema to Neon**: see `db/schema.sql` — run via psql or `python -c` script (we used psycopg directly).
 - **Deploy**: `vercel deploy --prod --yes` (or just push to `main` — Vercel auto-deploys via the connected GitHub repo).
 
+## v3 additions (May 2026)
+
+- **Per-feed customization**: `feeds.summary_length` ('short'|'standard'|'deep'), `feeds.sections` (TEXT[]), `feeds.frequency_days` (INT). Edited via `PATCH /api/feeds/{id}`. Summarizer prompt is composed from selected sections, length controls Gemini `max_output_tokens` and depth instructions.
+- **Cron frequency gating**: cron skips a feed when `last_delivered_at + frequency_days` is still in the future. Lets weekly/monthly feeds coexist with daily ones on a single daily cron tick.
+- **Cron run log**: every `/api/cron-check` invocation writes a row to `cron_runs` (feeds_checked, feeds_skipped, new_episodes, errors[], ok). `GET /api/status` returns the latest 5 runs.
+- **Tray UI**: status banner at top of subscriptions tray shows last-run summary + any errors. Each subscription has a gear icon that toggles an inline settings drawer (length / sections / frequency).
+
+### Resend custom domain — manual steps
+
+Until done, summary emails only deliver to the account owner (asomani@wp-labs.ai). To enable delivery to any recipient:
+
+1. In the Resend dashboard, add a domain you control (e.g. `podcastai.<yourdomain>`).
+2. Add the DNS records Resend provides (SPF + DKIM + optional MX) at your DNS host.
+3. Wait for verification (usually minutes).
+4. Update the `RESEND_FROM` env var in Vercel to `Podcast Summary <hello@<yourdomain>>`.
+5. Redeploy (or trigger a new deploy via push) for the env var to take effect.
+
+No code change is required — `lib/notify.py` already reads `RESEND_FROM` from env.
+
 ## Open follow-ups / nice-to-haves
 
-- [ ] Verify a custom domain in Resend so summaries can go to any email, not just owner's.
+- [ ] Verify a custom domain in Resend so summaries can go to any email, not just owner's (manual steps above).
 - [ ] Add audio-input transcription (Gemini 2.5 supports MP3 input directly) for podcasts without YouTube versions and thin show notes.
-- [ ] Per-feed customization: summary length, sections to include, frequency.
 - [ ] Auth (currently anyone with the URL can subscribe a feed to any email — fine for solo use, not multi-tenant).
-- [ ] Surface cron-check errors in the UI (currently buried in the `errors` array of the response).
-- [ ] If upgrading to Vercel Pro, change cron to `*/15 * * * *` for near-real-time.
+- [ ] If upgrading to Vercel Pro, change cron to `*/15 * * * *` for near-real-time. Frequency gating already in place so feeds with higher `frequency_days` are still skipped.
+
+## Schema migrations
+
+`db/schema.sql` is idempotent — all `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. After deploying schema changes, run the file against Neon. Example:
+
+```powershell
+$env:POSTGRES_URL = (vercel env pull --environment=production .env.local | Out-Null; (Get-Content .env.local | Select-String 'POSTGRES_URL').ToString().Split('=',2)[1].Trim('"'))
+psql $env:POSTGRES_URL -f db/schema.sql
+```
+
+Or from Python: `python -c "import psycopg, pathlib, os; psycopg.connect(os.environ['POSTGRES_URL']).execute(pathlib.Path('db/schema.sql').read_text()).connection.commit()"`
 
 ## Conventions for this project
 
