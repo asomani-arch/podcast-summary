@@ -44,13 +44,20 @@ OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "asomani@wp-labs.ai")
 def _pi_headers() -> dict:
     key    = os.environ.get("PODCAST_INDEX_KEY", "")
     secret = os.environ.get("PODCAST_INDEX_SECRET", "")
-    ts     = str(int(time.time()))
-    auth   = hashlib.sha1(f"{key}{secret}{ts}".encode()).hexdigest()
+    if not key or not secret:
+        raise HTTPException(
+            status_code=500,
+            detail="PODCAST_INDEX_KEY / PODCAST_INDEX_SECRET not configured.",
+        )
+    ts   = str(int(time.time()))
+    auth = hashlib.sha1(f"{key}{secret}{ts}".encode()).hexdigest()
+    # Per https://podcastindex-org.github.io/docs-api the Authorization header
+    # is just the raw SHA1 hex of key+secret+timestamp — no "Podcastindex …" prefix.
     return {
         "X-Auth-Key":    key,
         "X-Auth-Date":   ts,
-        "Authorization": f"Podcastindex {key}:{auth}",
-        "User-Agent":    "PodcastAI/2.0",
+        "Authorization": auth,
+        "User-Agent":    "PodcastAI/3.0",
         "Accept":        "application/json",
     }
 
