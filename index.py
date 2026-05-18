@@ -75,8 +75,12 @@ def pi_debug():
         "key_present":          bool(key),
         "key_stripped_length":  len(key),
         "key_prefix":           (key[:6] + "…") if key else "",
+        "key_is_pure_alnum":    key.isalnum() if key else False,
         "secret_present":       bool(secret),
         "secret_stripped_length":len(secret),
+        "secret_is_pure_alnum": secret.isalnum() if secret else False,
+        "secret_codepoint_max": max((ord(c) for c in secret), default=0),
+        "secret_byte_length":   len(secret.encode("utf-8")),
         "server_unix_ts":       int(time.time()),
     }
     if not key or not secret:
