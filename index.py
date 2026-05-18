@@ -42,8 +42,10 @@ OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "asomani@wp-labs.ai")
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _pi_headers() -> dict:
-    key    = os.environ.get("PODCAST_INDEX_KEY", "")
-    secret = os.environ.get("PODCAST_INDEX_SECRET", "")
+    # .strip() — pasting keys into Vercel env vars sometimes adds a trailing newline
+    # which breaks the SHA1 signature without breaking the X-Auth-Key check.
+    key    = os.environ.get("PODCAST_INDEX_KEY", "").strip()
+    secret = os.environ.get("PODCAST_INDEX_SECRET", "").strip()
     if not key or not secret:
         raise HTTPException(
             status_code=500,
@@ -59,6 +61,25 @@ def _pi_headers() -> dict:
         "Authorization": auth,
         "User-Agent":    "PodcastAI/3.0",
         "Accept":        "application/json",
+    }
+
+
+@app.get("/api/_pi-debug")
+def pi_debug():
+    """Diagnostic — returns non-secret info about the PI auth setup so we can
+    distinguish missing-key vs bad-key vs clock-skew. Safe to expose: it does
+    NOT leak the key or secret, only their lengths + a 6-char prefix."""
+    key    = os.environ.get("PODCAST_INDEX_KEY", "")
+    secret = os.environ.get("PODCAST_INDEX_SECRET", "")
+    return {
+        "key_present":          bool(key),
+        "key_length":            len(key),
+        "key_stripped_length":   len(key.strip()),
+        "key_prefix":            (key.strip()[:6] + "…") if key.strip() else "",
+        "secret_present":       bool(secret),
+        "secret_length":         len(secret),
+        "secret_stripped_length":len(secret.strip()),
+        "server_unix_ts":       int(time.time()),
     }
 
 
