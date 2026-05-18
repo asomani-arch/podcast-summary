@@ -102,11 +102,18 @@ def search_podcasts(q: str = Query(..., min_length=1)):
             pass
 
         podcasts = []
+        seen: set[str] = set()
         for f in results:
             pid = str(f.get("collectionId", "") or f.get("trackId", ""))
             feed_url = f.get("feedUrl", "")
             if not feed_url:
                 continue  # podcast without a public feed isn't useful to us
+            # iTunes can return the same podcast from multiple country storefronts;
+            # dedupe on feed URL (collectionId differs across storefronts).
+            dedup_key = feed_url.lower().rstrip("/")
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
             artwork = (
                 f.get("artworkUrl600")
                 or f.get("artworkUrl100")
