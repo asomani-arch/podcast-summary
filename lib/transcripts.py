@@ -112,7 +112,7 @@ def _fetch_youtube_transcript(video_id: str) -> str:
         if hasattr(YouTubeTranscriptApi, "get_transcript"):
             segments = YouTubeTranscriptApi.get_transcript(video_id)
         else:
-            segments = YouTubeTranscriptApi().fetch(video_id)
+            segments = _youtube_transcript_api().fetch(video_id)
 
         texts = []
         for segment in segments:
@@ -123,8 +123,32 @@ def _fetch_youtube_transcript(video_id: str) -> str:
             if text:
                 texts.append(text)
         return " ".join(texts)
-    except Exception:
+    except Exception as e:
+        print(f"youtube transcript failed for {video_id}: {type(e).__name__}: {e}", flush=True)
         return ""
+
+
+def _youtube_transcript_api() -> YouTubeTranscriptApi:
+    proxy_url = os.getenv("YOUTUBE_TRANSCRIPT_PROXY_URL")
+    webshare_user = os.getenv("WEBSHARE_PROXY_USERNAME")
+    webshare_pass = os.getenv("WEBSHARE_PROXY_PASSWORD")
+
+    if proxy_url:
+        from youtube_transcript_api.proxies import GenericProxyConfig
+
+        return YouTubeTranscriptApi(
+            proxy_config=GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+        )
+    if webshare_user and webshare_pass:
+        from youtube_transcript_api.proxies import WebshareProxyConfig
+
+        return YouTubeTranscriptApi(
+            proxy_config=WebshareProxyConfig(
+                proxy_username=webshare_user,
+                proxy_password=webshare_pass,
+            )
+        )
+    return YouTubeTranscriptApi()
 
 
 def _search_youtube(query: str) -> str | None:
@@ -181,11 +205,13 @@ def _try_audio_gemini(audio_url: str) -> tuple[str, bool]:
                     downloaded += len(chunk)
 
             client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-            uploaded = client.files.upload(path=tmp_path)
+            uploaded = client.files.upload(file=tmp_path)
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=["Please transcribe the provided podcast audio accurately:", uploaded],
             )
+            if not response.text:
+                print("gemini audio transcription returned empty text", flush=True)
             return response.text or "", partial
         finally:
             if tmp_path:
@@ -193,5 +219,6 @@ def _try_audio_gemini(audio_url: str) -> tuple[str, bool]:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-    except Exception:
+    except Exception as e:
+        print(f"gemini audio transcription failed: {type(e).__name__}: {e}", flush=True)
         return "", False
