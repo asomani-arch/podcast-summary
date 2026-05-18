@@ -60,6 +60,15 @@ def _serialize_feed_row(r: dict) -> dict:
     return out
 
 
+def _entry_description(entry: dict) -> str:
+    content = entry.get("content") or []
+    if content and isinstance(content, list):
+        value = content[0].get("value") if isinstance(content[0], dict) else ""
+        if value:
+            return value
+    return entry.get("summary") or entry.get("description") or ""
+
+
 # ── Static redirect ────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -189,7 +198,7 @@ def podcast_episodes(
 
             ep = cached.get(guid)
             has_current_summary = bool(ep and summary_is_current(ep.get("summary")))
-            description = entry.get("summary") or entry.get("description") or ""
+            description = _entry_description(entry)
             episodes.append({
                 "guid":              guid,
                 "title":             entry.get("title", "Untitled"),
@@ -554,7 +563,7 @@ def _process_feed(feed_row: dict, results: dict):
             continue
 
         title = entry.get("title", "Untitled")
-        description = entry.get("summary", entry.get("description", ""))
+        description = _entry_description(entry)
         episode_url = entry.get("link", "")
         duration = entry.get("itunes_duration", "")
         audio_url = ""

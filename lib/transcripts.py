@@ -41,9 +41,10 @@ def _try_youtube(
     video_ids = _extract_youtube_video_ids(description)
     video_ids.extend(_extract_youtube_video_ids(episode_url))
 
-    page_text = _fetch_page_text(episode_url)
-    if page_text:
-        video_ids.extend(_extract_youtube_video_ids(page_text))
+    for page_url in _candidate_page_urls(episode_url):
+        page_text = _fetch_page_text(page_url)
+        if page_text:
+            video_ids.extend(_extract_youtube_video_ids(page_text))
 
     searched = _search_youtube(f"{podcast_title} {episode_title}")
     if searched:
@@ -91,6 +92,19 @@ def _fetch_page_text(url: str) -> str:
         return resp.text
     except Exception:
         return ""
+
+
+def _candidate_page_urls(url: str) -> list[str]:
+    if not url:
+        return []
+
+    candidates = [url]
+    match = re.match(r"^(https?://(?:www\.)?colossus\.com/episode/)([^/]+)/?$", url)
+    if match:
+        base, slug = match.groups()
+        if not slug.startswith("the-"):
+            candidates.append(f"{base}the-{slug}/")
+    return candidates
 
 
 def _fetch_youtube_transcript(video_id: str) -> str:
