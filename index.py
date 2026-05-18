@@ -189,12 +189,14 @@ def podcast_episodes(
 
             ep = cached.get(guid)
             has_current_summary = bool(ep and summary_is_current(ep.get("summary")))
+            description = entry.get("summary") or entry.get("description") or ""
             episodes.append({
                 "guid":              guid,
                 "title":             entry.get("title", "Untitled"),
                 "published_at":      pub,
+                "episode_url":       entry.get("link", ""),
                 "audio_url":         audio_url,
-                "description":       (entry.get("summary") or entry.get("description") or "")[:500],
+                "description":       description[:12000],
                 "duration":          entry.get("itunes_duration", ""),
                 "has_summary":       has_current_summary,
                 "episode_id":        ep["id"] if has_current_summary else None,
@@ -217,6 +219,7 @@ class SummarizeRequest(BaseModel):
     publisher:           str = ""
     episode_guid:        str
     episode_title:       str
+    episode_url:         str = ""
     episode_audio_url:   str = ""
     episode_description: str = ""
     episode_duration:    str = ""
@@ -270,6 +273,7 @@ def summarize_episode(req: SummarizeRequest):
             req.episode_title,
             req.episode_description,
             req.episode_audio_url,
+            req.episode_url,
         )
         if not text:
             raise HTTPException(
@@ -551,6 +555,7 @@ def _process_feed(feed_row: dict, results: dict):
 
         title = entry.get("title", "Untitled")
         description = entry.get("summary", entry.get("description", ""))
+        episode_url = entry.get("link", "")
         duration = entry.get("itunes_duration", "")
         audio_url = ""
         for enc in entry.get("enclosures", []):
@@ -562,7 +567,7 @@ def _process_feed(feed_row: dict, results: dict):
         if entry.get("published_parsed"):
             pub = datetime.fromtimestamp(mktime(entry.published_parsed))
 
-        text, source = get_transcript(podcast_title, title, description, audio_url)
+        text, source = get_transcript(podcast_title, title, description, audio_url, episode_url)
         if not text:
             continue
 

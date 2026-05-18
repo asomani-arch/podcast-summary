@@ -217,6 +217,7 @@ async function summarizeEpisode(index, btn) {
       publisher:           p.publisher || '',
       episode_guid:        ep.guid,
       episode_title:       ep.title,
+      episode_url:         ep.episode_url || '',
       episode_audio_url:   ep.audio_url || '',
       episode_description: ep.description || '',
       episode_duration:    ep.duration || '',

@@ -2,7 +2,7 @@
 import os
 import re
 
-SUMMARY_STYLE_VERSION = "pe-newsletter-v1"
+SUMMARY_STYLE_VERSION = "pe-newsletter-v2"
 SUMMARY_MARKER = f"<!-- summary_style:{SUMMARY_STYLE_VERSION} -->"
 
 _client = None

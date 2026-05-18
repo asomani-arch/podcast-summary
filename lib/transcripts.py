@@ -1,8 +1,9 @@
 """Transcript extraction: YouTube captions -> Gemini audio transcription -> RSS show notes."""
+from html import unescape
 import os
 import re
 import tempfile
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import requests
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -13,9 +14,10 @@ def get_transcript(
     episode_title: str,
     description: str = "",
     audio_url: str = "",
+    episode_url: str = "",
 ) -> tuple[str, str]:
     # 1. YouTube captions.
-    yt = _try_youtube(podcast_title, episode_title)
+    yt = _try_youtube(podcast_title, episode_title, description, episode_url)
     if yt:
         return yt, "youtube"
 
@@ -30,15 +32,85 @@ def get_transcript(
     return clean, "shownotes"
 
 
-def _try_youtube(podcast_title: str, episode_title: str) -> str | None:
+def _try_youtube(
+    podcast_title: str,
+    episode_title: str,
+    description: str = "",
+    episode_url: str = "",
+) -> str | None:
+    video_ids = _extract_youtube_video_ids(description)
+    video_ids.extend(_extract_youtube_video_ids(episode_url))
+
+    page_text = _fetch_page_text(episode_url)
+    if page_text:
+        video_ids.extend(_extract_youtube_video_ids(page_text))
+
+    searched = _search_youtube(f"{podcast_title} {episode_title}")
+    if searched:
+        video_ids.append(searched)
+
+    seen: set[str] = set()
+    for video_id in video_ids:
+        if video_id in seen:
+            continue
+        seen.add(video_id)
+        transcript = _fetch_youtube_transcript(video_id)
+        if transcript:
+            return transcript
+    return None
+
+
+def _extract_youtube_video_ids(text: str) -> list[str]:
+    if not text:
+        return []
+
+    decoded = unquote(unescape(text))
+    patterns = (
+        r"(?:youtube\.com/watch\?[^\"'<>\s]*v=|youtu\.be/)([a-zA-Z0-9_-]{11})",
+        r"youtube\.com/(?:embed|shorts)/([a-zA-Z0-9_-]{11})",
+        r'"videoId":"([a-zA-Z0-9_-]{11})"',
+    )
+
+    ids: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, decoded):
+            video_id = match.group(1)
+            if video_id not in seen:
+                seen.add(video_id)
+                ids.append(video_id)
+    return ids
+
+
+def _fetch_page_text(url: str) -> str:
+    if not url or not re.match(r"^https?://", url):
+        return ""
     try:
-        video_id = _search_youtube(f"{podcast_title} {episode_title}")
-        if not video_id:
-            return None
-        segments = YouTubeTranscriptApi.get_transcript(video_id)
-        return " ".join(seg["text"] for seg in segments)
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp.raise_for_status()
+        return resp.text
     except Exception:
-        return None
+        return ""
+
+
+def _fetch_youtube_transcript(video_id: str) -> str:
+    try:
+        if hasattr(YouTubeTranscriptApi, "get_transcript"):
+            segments = YouTubeTranscriptApi.get_transcript(video_id)
+        else:
+            segments = YouTubeTranscriptApi().fetch(video_id)
+
+        texts = []
+        for segment in segments:
+            if isinstance(segment, dict):
+                text = segment.get("text", "")
+            else:
+                text = getattr(segment, "text", "")
+            if text:
+                texts.append(text)
+        return " ".join(texts)
+    except Exception:
+        return ""
 
 
 def _search_youtube(query: str) -> str | None:
