@@ -281,6 +281,21 @@ def list_subscriptions(user_id: str) -> list[dict]:
         return cur.fetchall()
 
 
+def subscribed_rss_urls(user_id: str) -> set[str]:
+    """Normalized (lowercased, trailing-slash-stripped) rss_urls the user follows —
+    for annotating search results."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.rss_url
+            FROM subscriptions s JOIN podcasts p ON p.id = s.podcast_id
+            WHERE s.user_id = %s AND p.rss_url IS NOT NULL
+            """,
+            (user_id,),
+        )
+        return {(r["rss_url"] or "").lower().rstrip("/") for r in cur.fetchall()}
+
+
 def subscribed_pi_feed_ids(user_id: str) -> set[str]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(

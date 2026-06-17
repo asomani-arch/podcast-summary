@@ -14,10 +14,9 @@ from pydantic import BaseModel
 
 sys.path.append(str(Path(__file__).parent))
 
+from lib import catalog
 from lib import db
-from lib import podcastindex as pi
 from lib.auth import User, current_user, optional_user
-from lib.podcastindex import PodcastIndexError
 from lib.summarizer import SUMMARY_STYLE_VERSION, strip_summary_marker, summarize
 from lib.transcripts import get_transcript
 
@@ -70,13 +69,14 @@ def update_me(req: ProfileUpdate, user: User = Depends(current_user)):
 @app.get("/api/search")
 def search_podcasts(q: str = Query(..., min_length=1), user: User | None = Depends(optional_user)):
     try:
-        results = pi.search_podcasts(q, max_results=20)
-    except PodcastIndexError as e:
+        results = catalog.search_podcasts(q, max_results=20)
+    except Exception as e:
         raise HTTPException(status_code=503, detail=f"Search unavailable: {e}")
 
-    subscribed = db.subscribed_pi_feed_ids(user.id) if user else set()
+    subscribed = db.subscribed_rss_urls(user.id) if user else set()
     for r in results:
-        r["subscribed"] = bool(r.get("pi_feed_id") and r["pi_feed_id"] in subscribed)
+        rss = (r.get("rss_url") or "").lower().rstrip("/")
+        r["subscribed"] = bool(rss and rss in subscribed)
     return {"podcasts": results}
 
 
@@ -84,25 +84,20 @@ def search_podcasts(q: str = Query(..., min_length=1), user: User | None = Depen
 
 @app.get("/api/podcast-episodes")
 def podcast_episodes(
-    pi_feed_id: str = Query(default=""),
     rss_url: str = Query(default=""),
+    pi_feed_id: str = Query(default=""),   # accepted for forward-compat; unused in catalog mode
     q: str = Query(default=""),
     max_results: int = Query(default=50, le=200),
 ):
-    if not pi_feed_id and not rss_url:
-        raise HTTPException(status_code=400, detail="pi_feed_id or rss_url required.")
+    if not rss_url:
+        raise HTTPException(status_code=400, detail="rss_url required.")
     try:
-        if q:
-            episodes = pi.search_episodes_in_feed(pi_feed_id or rss_url, q, max_results=max_results)
-        elif pi_feed_id:
-            episodes = pi.episodes_by_feed_id(pi_feed_id, max_results=max_results)
-        else:
-            episodes = pi.episodes_by_feed_url(rss_url, max_results=max_results)
-    except PodcastIndexError as e:
-        raise HTTPException(status_code=503, detail=f"Episodes unavailable: {e}")
+        episodes = catalog.episodes_from_rss(rss_url, max_results=max_results, query=q)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not load episodes: {e}")
 
     # Annotate which episodes already have a cached summary.
-    podcast = db.get_podcast_by_rss(rss_url) if rss_url else None
+    podcast = db.get_podcast_by_rss(rss_url)
     summarized: dict[str, int] = {}
     if podcast:
         summarized = db.summarized_episode_ids(podcast["id"], [e["guid"] for e in episodes])
