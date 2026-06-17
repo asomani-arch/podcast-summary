@@ -34,7 +34,7 @@ DEFAULT_DURATION_SECONDS = 3600  # assume ~1 hour when the feed omits duration
 
 # Sources that give us the full spoken content; anything else is partial and the
 # brief must say so and stay within what the material supports.
-FULL_TRANSCRIPT_SOURCES = {"colossus", "youtube", "audio"}
+FULL_TRANSCRIPT_SOURCES = {"colossus", "deepgram", "youtube", "audio"}
 SOURCE_NOTES = {
     "audio_partial": (
         "Full transcript unavailable; this brief is based on a partial audio "

@@ -21,20 +21,56 @@ def get_transcript(
     if colossus:
         return colossus, "colossus"
 
-    # 2. YouTube captions.
+    # 2. Deepgram — full, accurate transcription straight from the audio URL.
+    #    Reliable from datacenter IPs (unlike YouTube captions) and not size-capped,
+    #    so this is the primary path for long episodes when a key is configured.
+    deepgram = _try_deepgram(audio_url)
+    if deepgram:
+        return deepgram, "deepgram"
+
+    # 3. YouTube captions (free, but often IP-blocked from servers without a proxy).
     yt = _try_youtube(podcast_title, episode_title, description, episode_url)
     if yt:
         return yt, "youtube"
 
-    # 3. Direct audio transcription.
+    # 4. Direct audio transcription via Gemini (size-capped fallback).
     if audio_url:
         audio_text, partial = _try_audio_gemini(audio_url)
         if audio_text:
             return audio_text, "audio_partial" if partial else "audio"
 
-    # 4. RSS show notes fallback.
+    # 5. RSS show notes fallback.
     clean = re.sub(r"<[^>]+>", "", description or "").strip()
     return clean, "shownotes"
+
+
+def _try_deepgram(audio_url: str) -> str | None:
+    """Transcribe a remote audio URL with Deepgram's prerecorded API. Deepgram
+    fetches the audio itself (no large download into our function) and returns a
+    full transcript, handling multi-hour episodes well."""
+    key = os.getenv("DEEPGRAM_API_KEY")
+    if not key or not audio_url:
+        return None
+    try:
+        resp = requests.post(
+            "https://api.deepgram.com/v1/listen",
+            params={
+                "model": "nova-3",
+                "smart_format": "true",
+                "punctuate": "true",
+                "paragraphs": "true",
+            },
+            headers={"Authorization": f"Token {key}", "Content-Type": "application/json"},
+            json={"url": audio_url},
+            timeout=290,
+        )
+        resp.raise_for_status()
+        alt = resp.json()["results"]["channels"][0]["alternatives"][0]
+        text = (alt.get("paragraphs", {}) or {}).get("transcript") or alt.get("transcript", "")
+        return text or None
+    except Exception as e:
+        print(f"deepgram failed: {type(e).__name__}: {e}", flush=True)
+        return None
 
 
 def _try_youtube(
