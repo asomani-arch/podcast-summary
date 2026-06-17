@@ -96,8 +96,9 @@ This persona drives two cross-cutting requirements:
 - Every user-owned row is scoped by `user_id = auth.uid()` and protected by RLS.
 - A `profiles` row is created on first login holding per-user preferences
   (email cadence, default delivery channel, etc.).
-- **[DEFAULT]** Onboarding: after first login, prompt the user to add at least one
-  show / person / topic so recommendations and delivery have something to work with.
+- Onboarding: after first login, prompt the user to add at least one show / person /
+  topic so recommendations and delivery have something to work with. **Skippable** —
+  never blocks access. *(Resolved.)*
 
 ### F2 — Podcast search & discovery
 - Search popular podcasts by name/keyword. **Migrate from iTunes to Podcast Index**
@@ -118,8 +119,10 @@ This persona drives two cross-cutting requirements:
 - Generate (or return cached) a summary for any episode. See **§7** for the format and
   length spec.
 - Summaries are cached **globally per episode** (not per user) because the lens is fixed.
-- **[DEFAULT]** Per-user soft cap on on-demand summaries (e.g. **30/day**) to bound
-  Gemini cost from anonymous/abusive use. Confirm the number.
+- Per-user soft cap of **4 newly-generated (uncached) summaries/user/day** on
+  **manual on-demand** summarization (browsing the back catalog). Cached reads are
+  unlimited, and automated subscription/person/topic deliveries do **not** count against
+  this cap. Sized for a time-poor PE reader, not a power-scraper. *(Resolved.)*
 
 ### F5 — Show subscriptions
 - Follow / unfollow a show. A follow means: summarize every new episode and deliver it
@@ -144,16 +147,17 @@ This persona drives two cross-cutting requirements:
   (title/description) with a configurable threshold to suppress weak matches.
 
 ### F8 — Recommendations
-- Model user interest at the **(person, topic)** level from: tracked people, tracked
-  topics, and **[DEFAULT]** engagement signals (episodes opened/summarized/read).
+- Model user interest at the **(person, topic)** level from explicit signals only for
+  v5: tracked people, tracked topics, and followed shows. (Engagement signals such as
+  opens/reads are **deferred** — see §14.)
 - Recommend **episodes** (across any popular show) whose extracted guests/topics match
   the interest profile — explicitly handling the "Rogan has Elon one week, an unrelated
   guest the next" case by scoring at the episode level, not the show level.
 - Each recommendation carries a reason ("because you track *Elon Musk*", "covers
   *AI infrastructure*"). One-click: subscribe to the show, track the person, or open
   the summary.
-- **[DEFAULT]** Surfaced in an in-app **Discover** view and as a "Recommended for you"
-  block appended to digests.
+- Surfaced in an in-app **Discover** view and as a small "Recommended for you" block
+  (**~2–3 picks**) appended to digests. *(Resolved.)*
 
 ### F9 — Email delivery
 - Cadence is a per-user setting (default **instant**), with options instant / daily /
@@ -307,8 +311,8 @@ Decision #15 tabled the custom domain. Consequences for v5:
 - **Dedup:** the `UNIQUE(user_id, episode_id)` constraint guarantees one delivery per
   episode per user; the `reasons` array records *every* reason it matched so the email
   can say "matched because: you follow *Invest Like the Best*, and *Elon Musk* appeared."
-- **[DEFAULT]** Negative feedback: a "not relevant" control on delivered items feeds a
-  per-user suppression list and tunes future topic/person matching.
+- Negative feedback ("not relevant"): **deferred to post-v5** (see §14). The
+  `deliveries` / match schema is designed so it slots in later without migration.
 
 ---
 
@@ -341,20 +345,26 @@ Decision #15 tabled the custom domain. Consequences for v5:
   + digest delivery, per-user cadence, dedup, in-app reader.
 - **Phase 3 — People tracking:** guest extraction, matching, person-framed summaries.
 - **Phase 4 — Topic tracking:** topic extraction + threshold matching.
-- **Phase 5 — Recommendations:** (person, topic) interest model + Discover view +
-  digest block.
+- **Phase 5 — Recommendations:** (person, topic) interest model (explicit signals only;
+  engagement deferred) + Discover view + digest block.
 - **Phase 6 — (Deferred) Custom domain:** verify a domain in Resend → enable multi-user
   email.
 
 ---
 
-## 12. Open decisions to confirm (the **[DEFAULT]**s)
+## 12. Resolved defaults
 
-1. Per-user on-demand summary cap (proposed **30/day**).
-2. Onboarding flow seeds ≥1 show/person/topic — OK?
-3. Recommendations surfaced in-app Discover + digest block — OK?
-4. Engagement (opens/reads) used as a rec signal — OK, or people/topics only?
-5. "Not relevant" feedback loop — in scope for v5 or later?
+The five open `[DEFAULT]`s from the draft are now decided (2026-06-16):
+
+1. **On-demand summary cap — 4 newly-generated/user/day.** Manual back-catalog
+   summarization only; cached reads unlimited; automated subscription/person/topic
+   deliveries are exempt. Sized for a time-poor PE reader.
+2. **Onboarding seeds ≥1 interest — yes, skippable** (never blocks access).
+3. **Recs surfaced in Discover + digest — yes**, with the digest block capped at ~2–3
+   picks.
+4. **Engagement as a rec signal — deferred** (§14). v5 recommends on explicit signals
+   only: tracked people, tracked topics, followed shows.
+5. **"Not relevant" feedback loop — deferred to post-v5** (§14); schema kept compatible.
 
 ---
 
@@ -369,3 +379,20 @@ Decision #15 tabled the custom domain. Consequences for v5:
 | Podcast Index rate limits | Cache catalog/episode data; bounded curated popular set |
 | RLS + Python service-role footguns | Service-role only in scan pipeline; user routes always filter by `auth.uid()` |
 | Gemini quality ceiling on dense 3 h episodes | Revisit Claude-via-AI-Gateway for summaries if fidelity is insufficient |
+
+---
+
+## 14. Deferred / future
+
+- **Engagement-based recommendations** — use open/read/summarize events to refine the
+  (person, topic) interest model. Deferred from v5 (sparse signal early + extra tracking
+  surface). The `engagement` table exists in the schema (§7.2) so it can be populated
+  later without migration.
+- **"Not relevant" feedback loop** — per-user suppression + match tuning. Deferred;
+  `deliveries`/match schema kept compatible.
+- **Custom email domain (Phase 6)** — enables arbitrary-recipient email. Until then,
+  email is owner-only and the in-app reader carries non-owner users (§8, §13).
+- **Per-user lens customization** — the lens is fixed PE for now (this is what lets us
+  cache one summary per episode globally). Revisit only if non-PE users appear.
+- **Claude-via-AI-Gateway summaries** — fallback if Gemini fidelity proves insufficient
+  on long, dense episodes.
