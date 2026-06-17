@@ -19,9 +19,10 @@ VALID_CADENCES = {"instant", "daily", "weekly"}
 
 
 def get_conn():
-    url = os.getenv("POSTGRES_URL")
+    # Prefer SUPABASE_DB_URL so a leftover Neon-managed POSTGRES_URL can't shadow it.
+    url = os.getenv("SUPABASE_DB_URL") or os.getenv("POSTGRES_URL")
     if not url:
-        raise RuntimeError("POSTGRES_URL not set")
+        raise RuntimeError("SUPABASE_DB_URL / POSTGRES_URL not set")
     return psycopg.connect(
         url,
         row_factory=dict_row,
