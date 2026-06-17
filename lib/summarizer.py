@@ -1,8 +1,15 @@
-"""Gemini-powered summarization."""
+"""Gemini-powered summarization.
+
+v5 produces a *layered* investor-grade brief: a 10-second read at the top
+(TL;DR + bottom-line takeaways) followed by an exhaustive section-by-section
+walkthrough sized to the episode's length. The lens is fixed private-equity for
+every reader, which is what lets a single summary be cached and reused across
+users (see docs/PRD.md §7).
+"""
 import os
 import re
 
-SUMMARY_STYLE_VERSION = "pe-newsletter-v4"
+SUMMARY_STYLE_VERSION = "pe-layered-v5"
 SUMMARY_MARKER = f"<!-- summary_style:{SUMMARY_STYLE_VERSION} -->"
 
 _client = None
@@ -17,21 +24,32 @@ def client():
     return _client
 
 
-# Length remains a feed-level preference, but the final brief is also scaled by
-# episode duration when the RSS feed provides it.
-LENGTH_PROFILES = {
-    "short": {"fallback_words": (200, 260), "tokens": 1000},
-    "standard": {"fallback_words": (300, 380), "tokens": 1500},
-    "deep": {"fallback_words": (425, 500), "tokens": 2200},
+# Length is driven by episode duration: ~1,000 words per hour of audio, with a
+# floor (short episodes still get a real brief) and a soft cap (a 4-hour epic
+# stays readable). See docs/PRD.md §6.
+WORDS_PER_HOUR = 1000
+MIN_TARGET_WORDS = 400
+MAX_TARGET_WORDS = 3000
+DEFAULT_DURATION_SECONDS = 3600  # assume ~1 hour when the feed omits duration
+
+# Sources that give us the full spoken content; anything else is partial and the
+# brief must say so and stay within what the material supports.
+FULL_TRANSCRIPT_SOURCES = {"colossus", "youtube", "audio"}
+SOURCE_NOTES = {
+    "audio_partial": (
+        "Full transcript unavailable; this brief is based on a partial audio "
+        "transcript and the later portion of the episode may not be reflected."
+    ),
+    "shownotes": (
+        "Full transcript unavailable; this brief is based only on the RSS show "
+        "notes, so it is necessarily limited and does not infer beyond them."
+    ),
 }
 
-DEFAULT_SECTIONS = ["overview", "takeaways"]
-FULL_TRANSCRIPT_SOURCES = {"colossus", "youtube", "audio"}
-SOURCE_LABELS = {
-    "colossus": "the Colossus transcript",
-    "audio_partial": "a partial audio transcript",
-    "shownotes": "RSS show notes",
-}
+# Gemini 2.5 Flash has a 1M-token context window, so we can pass the whole
+# transcript of even a 3-hour episode. The old 30k-char cap truncated long
+# transcripts to ~5k words, which defeated the point of scaling length up.
+MAX_SOURCE_CHARS = int(os.getenv("MAX_SUMMARY_SOURCE_CHARS", str(500_000)))
 
 
 def summary_is_current(summary: str | None) -> bool:
@@ -82,86 +100,128 @@ def _parse_duration_seconds(duration: str | int | None) -> int | None:
     return seconds or None
 
 
-def _word_range(length: str, duration: str | int | None) -> tuple[int, int]:
-    seconds = _parse_duration_seconds(duration)
-    if seconds:
-        minutes = seconds / 60
-        if minutes < 30:
-            return 200, 260
-        if minutes < 60:
-            return 275, 350
-        if minutes < 90:
-            return 350, 425
-        return 425, 500
-    return LENGTH_PROFILES.get(length, LENGTH_PROFILES["standard"])["fallback_words"]
+def _target_words(duration_seconds: int | None) -> int:
+    seconds = duration_seconds or DEFAULT_DURATION_SECONDS
+    raw = round(WORDS_PER_HOUR * seconds / 3600)
+    return max(MIN_TARGET_WORDS, min(MAX_TARGET_WORDS, raw))
 
 
-def _build_system_prompt(
-    length: str,
+def _duration_phrase(duration_seconds: int | None) -> str:
+    if not duration_seconds:
+        return ""
+    hours, rem = divmod(duration_seconds, 3600)
+    minutes = rem // 60
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    return " ".join(parts)
+
+
+def _build_prompt(
+    podcast_title: str,
+    episode_title: str,
+    source_text: str,
     transcript_source: str,
-    episode_duration: str | int | None,
+    duration_seconds: int | None,
+    focus_person: str | None,
 ) -> tuple[str, int]:
-    profile = LENGTH_PROFILES.get(length, LENGTH_PROFILES["standard"])
-    min_words, max_words = _word_range(length, episode_duration)
+    target_words = _target_words(duration_seconds)
+
+    # Never ask for more output than the source can actually support — this stops
+    # a thin show-notes blurb being padded into a fabricated 1,000-word essay.
+    source_words = len(source_text.split())
+    if source_words < 2 * target_words:
+        target_words = max(150, min(target_words, source_words // 2 or 150))
+
     full_transcript = transcript_source in FULL_TRANSCRIPT_SOURCES
     source_note_requirement = ""
     if not full_transcript:
-        source_label = SOURCE_LABELS.get(transcript_source, "the available source material")
+        note = SOURCE_NOTES.get(transcript_source, "Full transcript unavailable; this brief is based on limited source material.")
         source_note_requirement = (
-            "- Start with this exact italicized line before the first heading:\n"
-            f"  *Source note: Full transcript unavailable; this brief is based on {source_label}.*\n"
+            "Begin with this exact italicized line, before the first heading:\n"
+            f"  *Source note: {note}*\n\n"
+        )
+
+    duration_phrase = _duration_phrase(duration_seconds)
+    length_note = (
+        f"The episode runs about {duration_phrase}. " if duration_phrase else ""
+    )
+
+    focus_instruction = ""
+    if focus_person:
+        focus_instruction = (
+            f" This brief is being delivered to a reader who follows **{focus_person}**: "
+            f"while still summarizing the whole episode, give particular weight to "
+            f"{focus_person}'s contributions, claims, and the segments featuring them."
         )
 
     prompt = (
-        "You write smart newsletter-style podcast briefs for private equity investment "
-        "professionals. Use the transcript as the source of truth. If the source is only "
-        "show notes, be explicit about that limitation and do not infer beyond the evidence.\n\n"
-        "Output requirements:\n"
-        f"- Write {min_words}-{max_words} words total.\n"
-        "- Use markdown.\n"
+        "You write detailed, investor-grade podcast briefs for time-constrained "
+        "private-equity professionals. Your reader wants to *not miss anything that "
+        "matters* but triages in seconds, so the brief is layered: the top is a "
+        "10-second read, the body rewards a deeper read.\n\n"
+        "Use the transcript as the single source of truth. Never fabricate or imply "
+        "the episode said more than it did.\n\n"
         f"{source_note_requirement}"
-        "- Use exactly these sections, in this order:\n"
-        "  ## Overview\n"
-        "  One polished paragraph that explains the episode's core argument, why it matters, "
-        "and the private-equity context.\n"
-        "  ## Key Takeaways\n"
-        "  4-7 bullets, each with a bold takeaway label followed by concise analysis.\n\n"
+        f"{length_note}Write approximately {target_words} words total. Use "
+        "GitHub-flavored markdown. Produce exactly these sections, in this order:\n\n"
+        "## TL;DR\n"
+        "2-3 sentences capturing the single most investor-relevant thread of the episode.\n\n"
+        "## Bottom-Line Takeaways\n"
+        "3-5 bullets. Start each with a **bold takeaway** then a sentence or two of "
+        "crisp analysis. These are the punchlines an investor would repeat.\n\n"
+        "## Detailed Walkthrough\n"
+        "The substance, and where most of the words go. Use ### thematic subheadings "
+        "(one per major thread or segment) and cover every meaningful argument, "
+        "example, data point, and disagreement in the episode."
+        f"{focus_instruction}\n\n"
+        "## Notable Quotes\n"
+        "Only if there are genuinely striking, verbatim quotes: 1-3 short quotes with "
+        "attribution. Omit this heading entirely if nothing stands out.\n\n"
+        "## Companies, Sectors & Numbers\n"
+        "Only when present in the source: a compact list of the specific companies, "
+        "sectors, markets, and figures mentioned, for an investor scanning for names. "
+        "Omit this heading entirely if the episode is abstract.\n\n"
         "Private-equity lens:\n"
-        "- Prioritize insights relevant to deal sourcing, diligence, underwriting, portfolio "
-        "operations, value creation, management quality, industry structure, competitive "
-        "advantage, growth durability, unit economics, capital allocation, regulatory risk, "
-        "and exit implications when they are supported by the source.\n"
+        "- Prioritize insight relevant to deal sourcing, diligence, underwriting, "
+        "portfolio operations, value creation, management quality, industry structure, "
+        "competitive advantage, growth durability, unit economics, capital allocation, "
+        "regulatory risk, and exit implications — wherever the source supports it.\n"
         "- Mention companies, sectors, markets, and numbers only when present in the source.\n"
-        "- Translate generic discussion into investor-relevant implications without fabricating "
-        "facts or pretending the episode said more than it did.\n"
-        "- Avoid filler, hype, generic podcast recap language, and standalone quote sections.\n"
+        "- Translate generic discussion into investor-relevant implications without "
+        "inventing facts.\n"
+        "- No hype, no filler, no generic 'in this episode' recap language.\n\n"
+        f"Podcast: {podcast_title}\n"
+        f"Episode: {episode_title}\n"
+        f"Transcript/source type: {transcript_source or 'unknown'}\n\n"
+        f"Source material:\n{source_text[:MAX_SOURCE_CHARS]}"
     )
-    return prompt, profile["tokens"]
+
+    # Allow comfortable room for the target word count plus markdown structure.
+    max_tokens = int(target_words * 2) + 500
+    return prompt, max_tokens
 
 
 def summarize(
     podcast_title: str,
     episode_title: str,
     source_text: str,
-    length: str = "standard",
-    sections: list[str] | None = None,
+    length: str = "standard",          # accepted for backward compat; length is
+    sections: list[str] | None = None,  # now duration-driven and the format is fixed
     transcript_source: str = "",
     episode_duration: str | int | None = None,
+    focus_person: str | None = None,
 ) -> str:
-    if length not in LENGTH_PROFILES:
-        length = "standard"
-    system_prompt, max_tokens = _build_system_prompt(
-        length,
+    duration_seconds = _parse_duration_seconds(episode_duration)
+    prompt, max_tokens = _build_prompt(
+        podcast_title,
+        episode_title,
+        source_text,
         transcript_source,
-        episode_duration,
-    )
-
-    prompt = (
-        f"{system_prompt}\n\n"
-        f"Podcast: {podcast_title}\n"
-        f"Episode: {episode_title}\n"
-        f"Transcript/source type: {transcript_source or 'unknown'}\n\n"
-        f"Source material:\n{source_text[:30000]}"
+        duration_seconds,
+        focus_person,
     )
     response = client().models.generate_content(
         model="gemini-2.5-flash",
