@@ -257,7 +257,7 @@ function renderEpisodes() {
 async function openEpisodeSummary(index, btn) {
   const ep = state.episodes[index];
   const p = state.currentPodcast;
-  openPanel(ep.title, p.title);
+  openPanel(ep.title, p.title, ep.description);
   btn.disabled = true;
   btn.textContent = ep.has_summary ? 'Loading…' : 'Summarizing…';
   try {
@@ -290,16 +290,39 @@ async function openEpisodeSummary(index, btn) {
 }
 
 /* ── SUMMARY PANEL ─────────────────────────────────────── */
-function openPanel(epTitle, podcastName) {
+const LOADING_MSGS = [
+  'Finding the transcript…',
+  'Reading through the episode…',
+  'Pulling out the key insights…',
+  'Writing your detailed brief…',
+];
+
+function openPanel(epTitle, podcastName, descriptionHtml) {
   document.getElementById('panelTitle').textContent = epTitle;
   document.getElementById('panelPodcast').textContent = podcastName;
+  const preview = descriptionHtml ? stripTags(descriptionHtml).slice(0, 480) : '';
   document.getElementById('panelBody').innerHTML = `
-    <div class="panel-loading"><div class="spinner large"></div><p>Generating summary…</p></div>`;
+    <div class="panel-loading">
+      <div class="spinner large"></div>
+      <p id="loadingMsg">${LOADING_MSGS[0]}</p>
+      <p class="loading-hint">Detailed summaries of long episodes can take a minute or two — feel free to keep browsing.</p>
+      ${preview ? `<div class="loading-preview">
+        <p class="loading-preview-label">While you wait — about this episode</p>
+        <p>${esc(preview)}…</p></div>` : ''}
+    </div>`;
+  let i = 0;
+  clearInterval(state.loadingTimer);
+  state.loadingTimer = setInterval(() => {
+    i = (i + 1) % LOADING_MSGS.length;
+    const el = document.getElementById('loadingMsg');
+    if (el) el.textContent = LOADING_MSGS[i];
+  }, 3500);
   document.getElementById('summaryPanel').classList.add('open');
   document.getElementById('panelBackdrop').classList.remove('hidden');
 }
 
 function showSummaryInPanel(summary, source) {
+  clearInterval(state.loadingTimer);
   const html = window.marked ? marked.parse(summary || '') : (summary || '');
   document.getElementById('panelBody').innerHTML = `
     <div class="summary-content">${html}</div>
@@ -307,6 +330,7 @@ function showSummaryInPanel(summary, source) {
 }
 
 function closePanel() {
+  clearInterval(state.loadingTimer);
   document.getElementById('summaryPanel').classList.remove('open');
   document.getElementById('panelBackdrop').classList.add('hidden');
 }
@@ -470,6 +494,15 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// Strip HTML tags (regex, so no <img>/script side effects) then decode entities
+// via a textarea (which never executes content). Used for the loading preview.
+function stripTags(html) {
+  const noTags = String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const t = document.createElement('textarea');
+  t.innerHTML = noTags;
+  return t.value;
+}
+
 function formatDuration(secs) {
   if (!secs) return '';
   secs = parseInt(secs, 10);
@@ -483,6 +516,7 @@ function formatDuration(secs) {
 function sourceLabel(source) {
   const labels = {
     colossus: 'Colossus transcript',
+    deepgram: 'full audio transcript',
     youtube: 'YouTube captions',
     audio: 'audio transcript',
     audio_partial: 'partial audio transcript',
