@@ -8,10 +8,61 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/styles.css" />
+  <style>
+    /* v5 additions — kept self-contained; refine alongside the rest of the design later. */
+    .auth-overlay { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center;
+      justify-content: center; background: #faf8f4; padding: 24px; }
+    .auth-card { width: 100%; max-width: 380px; text-align: center; }
+    .auth-card .logo { justify-content: center; margin-bottom: 20px; }
+    .auth-card h1 { font-family: 'Playfair Display', serif; font-size: 1.7rem; margin: 0 0 8px; color: #1a1a2e; }
+    .auth-card p.sub { color: #6b6b7b; margin: 0 0 24px; font-size: .95rem; }
+    .auth-form { display: flex; flex-direction: column; gap: 10px; }
+    .auth-form input { padding: 13px 15px; border: 1px solid #e2ddd3; border-radius: 10px;
+      font-size: .95rem; font-family: inherit; }
+    .auth-form button { padding: 13px 15px; border: none; border-radius: 10px; background: #1a1a2e;
+      color: #fff; font-size: .95rem; font-weight: 600; cursor: pointer; font-family: inherit; }
+    .auth-form button:disabled { opacity: .6; cursor: default; }
+    .auth-msg { margin-top: 14px; font-size: .9rem; min-height: 20px; }
+    .auth-msg.ok { color: #1f7a4d; } .auth-msg.error { color: #c0392b; }
+    .account { display: flex; align-items: center; gap: 12px; }
+    .account-email { font-size: .82rem; color: #6b6b7b; max-width: 180px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; }
+    .btn-link { background: none; border: none; color: #6b6b7b; cursor: pointer; font-size: .82rem;
+      text-decoration: underline; font-family: inherit; }
+    .ep-search-wrap { margin: 0 0 14px; position: relative; }
+    .ep-search { width: 100%; padding: 10px 14px; border: 1px solid #e2ddd3; border-radius: 9px;
+      font-size: .9rem; font-family: inherit; }
+    .cadence-select, .settings-select { padding: 6px 8px; border: 1px solid #e2ddd3; border-radius: 7px;
+      font-size: .82rem; font-family: inherit; background: #fff; }
+    .tray-default { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 10px 0 14px; border-bottom: 1px solid #efeae0; margin-bottom: 12px; }
+    .tray-default span { font-size: .85rem; color: #4b4b59; }
+    .why-banner { background: #fff6e6; border: 1px solid #f0dcae; border-radius: 8px; padding: 8px 12px;
+      font-size: .85rem; color: #7a5b12; margin-bottom: 14px; }
+  </style>
 </head>
 <body>
 
-  <header class="site-header">
+  <!-- Auth gate -->
+  <div class="auth-overlay" id="authOverlay">
+    <div class="auth-card">
+      <div class="logo">
+        <svg class="logo-wave" viewBox="0 0 36 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 10 Q6 2 10 10 Q14 18 18 10 Q22 2 26 10 Q30 18 34 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo-text">Podcast<span class="accent">AI</span></span>
+      </div>
+      <h1>Sign in</h1>
+      <p class="sub">We'll email you a magic link — no password needed.</p>
+      <form class="auth-form" id="authForm" onsubmit="return sendMagicLink(event)">
+        <input type="email" id="authEmail" placeholder="you@example.com" autocomplete="email" required />
+        <button type="submit" id="authBtn">Send magic link</button>
+      </form>
+      <p class="auth-msg" id="authMsg"></p>
+    </div>
+  </div>
+
+  <header class="site-header hidden" id="appHeader">
     <div class="header-inner">
       <div class="logo">
         <svg class="logo-wave" viewBox="0 0 36 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -19,14 +70,18 @@
         </svg>
         <span class="logo-text">Podcast<span class="accent">AI</span></span>
       </div>
-      <button class="btn-subs" onclick="toggleSubsTray()">
-        Subscriptions
-        <span class="badge" id="subCount">0</span>
-      </button>
+      <div class="account">
+        <span class="account-email" id="accountEmail"></span>
+        <button class="btn-subs" onclick="toggleSubsTray()">
+          Subscriptions
+          <span class="badge" id="subCount">0</span>
+        </button>
+        <button class="btn-link" onclick="signOut()">Sign out</button>
+      </div>
     </div>
   </header>
 
-  <section class="hero">
+  <section class="hero hidden" id="appHero">
     <p class="hero-label">AI-powered summaries</p>
     <h1 class="hero-title">Search any podcast.<br>Get the insights instantly.</h1>
     <p class="hero-sub">Business and tech, distilled from any episode.</p>
@@ -49,7 +104,7 @@
     </div>
   </section>
 
-  <main class="main">
+  <main class="main hidden" id="appMain">
 
     <div class="empty-state" id="emptyState">
       <svg class="empty-icon" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -91,7 +146,11 @@
       </div>
 
       <div class="episodes-wrap">
-        <p class="section-label">Latest Episodes</p>
+        <p class="section-label">Episodes</p>
+        <div class="ep-search-wrap">
+          <input type="text" class="ep-search" id="epSearch" placeholder="Search this show's episodes…"
+                 autocomplete="off" spellcheck="false" />
+        </div>
         <div class="episode-list" id="episodeList"></div>
       </div>
     </div>
@@ -107,13 +166,6 @@
         <h3 class="panel-ep-title" id="panelTitle"></h3>
       </div>
       <div class="panel-head-actions">
-        <button class="btn-email hidden" id="emailBtn" onclick="emailCurrentSummary()">
-          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="1" y="3" width="14" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
-            <path d="m1 4 7 5 7-5" stroke="currentColor" stroke-width="1.4"/>
-          </svg>
-          Email me
-        </button>
         <button class="btn-icon" onclick="closePanel()">
           <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M3 3l10 10M13 3 3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -135,13 +187,21 @@
         </svg>
       </button>
     </div>
-    <div class="tray-status hidden" id="trayStatus"></div>
+    <div class="tray-default">
+      <span>New-episode emails</span>
+      <select class="cadence-select" id="defaultCadence" onchange="saveDefaultCadence()">
+        <option value="instant">Instant</option>
+        <option value="daily">Daily digest</option>
+        <option value="weekly">Weekly digest</option>
+      </select>
+    </div>
     <div class="subs-list" id="subsList"></div>
   </div>
 
   <!-- Toast -->
   <div class="toast hidden" id="toast"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
