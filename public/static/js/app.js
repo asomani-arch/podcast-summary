@@ -275,6 +275,8 @@ async function openEpisodeSummary(index, btn) {
       episode_url: ep.episode_url || '',
       episode_published_at: ep.published_at || null,
       episode_duration_seconds: ep.duration_seconds || null,
+      episode_transcript_url: ep.transcript_url || '',
+      episode_transcript_type: ep.transcript_type || '',
     });
     state.episodes[index] = { ...ep, has_summary: true, episode_id: data.episode_id };
     const actionEl = document.getElementById(`ep-action-${index}`);
@@ -515,6 +517,7 @@ function formatDuration(secs) {
 
 function sourceLabel(source) {
   const labels = {
+    published: 'official transcript',
     colossus: 'Colossus transcript',
     deepgram: 'full audio transcript',
     youtube: 'YouTube captions',

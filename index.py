@@ -123,6 +123,8 @@ class SummarizeRequest(BaseModel):
     episode_url: str = ""
     episode_published_at: str | None = None
     episode_duration_seconds: int | None = None
+    episode_transcript_url: str = ""
+    episode_transcript_type: str = ""
 
 
 @app.post("/api/summarize")
@@ -163,6 +165,8 @@ def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user))
     text, source = get_transcript(
         req.podcast_title, req.episode_title, req.episode_description,
         req.episode_audio_url, req.episode_url,
+        transcript_url=req.episode_transcript_url,
+        transcript_type=req.episode_transcript_type,
     )
     if not text:
         raise HTTPException(

@@ -5,6 +5,7 @@ lists. Used for search and episode browsing so the app needs no extra API keys.
 phase, where its episode-level person search is required.)
 """
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from time import mktime
 
@@ -80,8 +81,41 @@ def _entry_description(entry: dict) -> str:
     return entry.get("summary") or entry.get("description") or ""
 
 
+def _transcript_urls_by_guid(xml_bytes: bytes) -> dict[str, tuple[str, str]]:
+    """Parse <podcast:transcript> tags (Podcasting 2.0) out of the raw feed,
+    keyed by each item's <guid>. Prefers caption formats (vtt/srt) over html/json
+    for clean text. Returns {guid: (url, type)}."""
+    out: dict[str, tuple[str, str]] = {}
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        return out
+    for item in root.iter():
+        if item.tag.split("}")[-1] != "item":
+            continue
+        guid = None
+        chosen: tuple[str, str] | None = None
+        for ch in item:
+            tag = ch.tag.split("}")[-1]
+            if tag == "guid" and ch.text:
+                guid = ch.text.strip()
+            elif tag == "transcript":
+                url = ch.attrib.get("url")
+                ttype = ch.attrib.get("type", "") or ""
+                if not url:
+                    continue
+                is_caption = "vtt" in ttype.lower() or "srt" in ttype.lower()
+                if chosen is None or (is_caption and "html" in (chosen[1] or "").lower()):
+                    chosen = (url, ttype)
+        if guid and chosen:
+            out[guid] = chosen
+    return out
+
+
 def episodes_from_rss(rss_url: str, max_results: int = 50, query: str = "") -> list[dict]:
-    feed = feedparser.parse(_rss_fetch(rss_url))
+    raw = _rss_fetch(rss_url)
+    feed = feedparser.parse(raw)
+    transcripts = _transcript_urls_by_guid(raw)
     # When searching, scan a wider window then trim; otherwise just take the latest.
     window = feed.entries if query else feed.entries[:max_results]
     episodes: list[dict] = []
@@ -101,6 +135,7 @@ def episodes_from_rss(rss_url: str, max_results: int = 50, query: str = "") -> l
             except (ValueError, OverflowError, OSError):
                 published_at = None
         description = _entry_description(entry)
+        transcript_url, transcript_type = transcripts.get(guid, ("", ""))
         episodes.append({
             "pi_episode_id":    None,
             "guid":             guid,
@@ -110,6 +145,8 @@ def episodes_from_rss(rss_url: str, max_results: int = 50, query: str = "") -> l
             "episode_url":      entry.get("link", ""),
             "published_at":     published_at,
             "duration_seconds": _parse_duration_seconds(entry.get("itunes_duration", "")),
+            "transcript_url":   transcript_url,
+            "transcript_type":  transcript_type,
             "persons":          [],
         })
 

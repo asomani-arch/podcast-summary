@@ -1,5 +1,6 @@
 """Transcript extraction: YouTube captions -> Gemini audio transcription -> RSS show notes."""
 from html import unescape
+import json
 import os
 import re
 import tempfile
@@ -15,33 +16,94 @@ def get_transcript(
     description: str = "",
     audio_url: str = "",
     episode_url: str = "",
+    transcript_url: str = "",
+    transcript_type: str = "",
 ) -> tuple[str, str]:
     # 1. Official logged-in Colossus transcript, when a session cookie is configured.
     colossus = _try_colossus_transcript(episode_url)
     if colossus:
         return colossus, "colossus"
 
-    # 2. Deepgram — full, accurate transcription straight from the audio URL.
+    # 2. Publisher-provided transcript from the RSS feed (Podcasting 2.0). Free,
+    #    accurate, instant — the best source when the show publishes one.
+    published = _try_published_transcript(transcript_url, transcript_type)
+    if published:
+        return published, "published"
+
+    # 3. Deepgram — full, accurate transcription straight from the audio URL.
     #    Reliable from datacenter IPs (unlike YouTube captions) and not size-capped,
     #    so this is the primary path for long episodes when a key is configured.
     deepgram = _try_deepgram(audio_url)
     if deepgram:
         return deepgram, "deepgram"
 
-    # 3. YouTube captions (free, but often IP-blocked from servers without a proxy).
+    # 4. YouTube captions (free, but often IP-blocked from servers without a proxy).
     yt = _try_youtube(podcast_title, episode_title, description, episode_url)
     if yt:
         return yt, "youtube"
 
-    # 4. Direct audio transcription via Gemini (size-capped fallback).
+    # 5. Direct audio transcription via Gemini (size-capped fallback).
     if audio_url:
         audio_text, partial = _try_audio_gemini(audio_url)
         if audio_text:
             return audio_text, "audio_partial" if partial else "audio"
 
-    # 5. RSS show notes fallback.
+    # 6. RSS show notes fallback.
     clean = re.sub(r"<[^>]+>", "", description or "").strip()
     return clean, "shownotes"
+
+
+def _cues_to_text(body: str) -> str:
+    """Flatten a WebVTT or SRT caption file into plain prose."""
+    lines: list[str] = []
+    for raw in body.splitlines():
+        s = raw.strip()
+        if not s or s == "WEBVTT" or s.startswith(("NOTE", "STYLE")):
+            continue
+        if "-->" in s or s.isdigit():
+            continue
+        s = re.sub(r"<[^>]+>", "", s)  # strip inline cue tags like <c> or <00:00:01.000>
+        if s:
+            lines.append(s)
+    # Auto-captions often repeat a line across rolling cues; drop consecutive dupes.
+    deduped: list[str] = []
+    for s in lines:
+        if not deduped or deduped[-1] != s:
+            deduped.append(s)
+    return " ".join(deduped).strip()
+
+
+def _try_published_transcript(url: str, ttype: str = "") -> str | None:
+    """Fetch a publisher-provided transcript URL (Podcasting 2.0) and convert it
+    to plain text. Handles VTT/SRT, JSON (Whisper-style), HTML, and plain text."""
+    if not url:
+        return None
+    try:
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20, verify=False)
+        resp.raise_for_status()
+        body = resp.text
+    except Exception as e:
+        print(f"published transcript fetch failed: {type(e).__name__}: {e}", flush=True)
+        return None
+
+    t = (ttype or "").lower()
+    u = url.lower()
+    try:
+        if "json" in t or u.endswith(".json"):
+            data = json.loads(body)
+            if isinstance(data, dict) and isinstance(data.get("text"), str):
+                return data["text"].strip() or None
+            segs = data.get("segments", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            text = " ".join((s.get("body") or s.get("text") or "") for s in segs if isinstance(s, dict))
+            return text.strip() or None
+        if "vtt" in t or "srt" in t or u.endswith((".vtt", ".srt")):
+            return _cues_to_text(body) or None
+        if "html" in t or u.endswith((".html", ".htm")) or "<" in body[:200]:
+            return unescape(re.sub(r"<[^>]+>", " ", body)).strip() or None
+        return body.strip() or None
+    except Exception as e:
+        print(f"published transcript parse failed: {type(e).__name__}: {e}", flush=True)
+        return None
 
 
 def _try_deepgram(audio_url: str) -> str | None:
