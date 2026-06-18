@@ -4,7 +4,39 @@
 
 ## What this is
 
-A web app + cron-driven agent that watches subscribed podcast RSS feeds and emails detailed AI-generated summaries (Overview, Key Topics, Takeaways, Notable Quotes, Who Should Listen) when new episodes drop.
+A multi-user web app that lets you search podcasts, read detailed AI summaries of any
+episode, subscribe for auto-summaries of new episodes, track people/topics to catch them
+across shows, and get recommendations. Built to the spec in [docs/PRD.md](docs/PRD.md).
+
+---
+
+## ⚠️ v5 — CURRENT ARCHITECTURE (this supersedes the older notes below)
+
+The app was rebuilt as a multi-tenant product (Phases 0–5 of docs/PRD.md), all live on
+`main` + production. Key differences from the legacy notes further down:
+
+| Concern | v5 reality |
+|---|---|
+| Auth | **Supabase Auth** (email magic-link). Frontend uses supabase-js (CDN); backend verifies the bearer token via `GET {SUPABASE_URL}/auth/v1/user` (`lib/auth.py`). |
+| Database | **Supabase Postgres** (transaction pooler), not Neon. Code reads `SUPABASE_DB_URL` (falls back to `POSTGRES_URL`). Schema: `db/schema_v5.sql` (multi-tenant + RLS). |
+| Transcripts | **Publisher RSS transcript** (`podcast:transcript`) → **Deepgram** (full audio, `DEEPGRAM_API_KEY`) → YouTube → Gemini audio → show notes (`lib/transcripts.py`). |
+| Summaries | Gemini 2.5 Flash, **thinking disabled** (else output truncates), layered investor format, ~1000 words/hr (`lib/summarizer.py`). One shared summary per episode (`episode_summaries`). |
+| Search / episodes | iTunes search + RSS episode parsing (`lib/catalog.py`); no API key needed. `lib/podcastindex.py` exists but is unused (reserved for broader people-scan). |
+| Delivery | `/api/scan` (every 30 min) + `/api/digest` daily/weekly, driven by **GitHub Actions** (`.github/workflows/scan.yml`), authed with `SCAN_SECRET`. One deduped delivery per (user, episode); reasons = show / person / topic. |
+| People/topics | Tracked per user; scan extracts guests+topics (`lib/extract.py`) from subscribed shows + a rotating batch of ~24 curated `is_popular` shows (seed via `POST /api/admin/seed-popular`). |
+| Recommendations | `/api/recommendations` — episodes matching tracked people/topics not yet delivered. |
+| Deploy | `git push origin <branch>:main` → Vercel auto-deploys production. Or API deploy with `VERCEL_TOKEN`. Local secrets in `.env.local` (gitignored) incl. `VERCEL_TOKEN`, `SCAN_SECRET`. |
+
+**v5 env vars (Vercel):** `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+`SUPABASE_DB_URL`, `DEEPGRAM_API_KEY`, `SCAN_SECRET`, `GEMINI_API_KEY`, `RESEND_API_KEY`,
+`RESEND_FROM`. (Legacy Neon `POSTGRES_URL*` vars are still present but unused.)
+
+**Known limitations:** email only delivers to the owner until a custom Resend domain is
+verified — everyone else reads summaries in the in-app **Inbox** (PRD §8). People/topic
+coverage = subscribed + curated popular shows (add a free Podcast Index key for true
+universe scan).
+
+---
 
 ## Live deployment
 
