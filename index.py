@@ -325,6 +325,48 @@ def deliveries(user: User = Depends(current_user)):
     return {"deliveries": db.list_deliveries(user.id)}
 
 
+# ── Recommendations (Discover) ─────────────────────────────────────────────────
+
+@app.get("/api/recommendations")
+def recommendations(user: User = Depends(current_user)):
+    return {"recommendations": db.recommend_episodes(user.id, limit=20)}
+
+
+@app.post("/api/episodes/{episode_id}/summarize")
+def summarize_existing(episode_id: int, user: User = Depends(current_user)):
+    """Summarize an episode already in our catalog (e.g. a recommendation),
+    using its stored metadata. Respects the global cache + the daily cap."""
+    db.ensure_profile(user.id, user.email)
+    ep = db.get_episode_full(episode_id)
+    if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found.")
+
+    cached = db.get_episode_summary(episode_id)
+    if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
+        return {"episode_id": episode_id, "summary": cached["summary_md"],
+                "source": cached.get("transcript_source"), "cached": True}
+
+    if db.count_user_summaries_today(user.id) >= MANUAL_SUMMARY_DAILY_CAP:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily limit of {MANUAL_SUMMARY_DAILY_CAP} on-demand summaries reached.",
+        )
+    text, source = get_transcript(
+        ep["podcast_title"], ep["title"], ep.get("description") or "",
+        ep.get("audio_url") or "", ep.get("episode_url") or "",
+    )
+    if not text:
+        raise HTTPException(status_code=422, detail="Could not extract a transcript for this episode.")
+    summary_md = strip_summary_marker(summarize(
+        ep["podcast_title"], ep["title"], text,
+        transcript_source=source, episode_duration=ep.get("duration_seconds"),
+    ))
+    db.save_episode_summary(episode_id, summary_md=summary_md, transcript_source=source,
+                            model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION)
+    db.record_engagement(user.id, episode_id, "summarize")
+    return {"episode_id": episode_id, "summary": summary_md, "source": source, "cached": False}
+
+
 # ── Scan + delivery pipeline (called by the external scheduler) ─────────────────
 
 @app.post("/api/scan")

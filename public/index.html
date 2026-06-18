@@ -120,6 +120,7 @@
       </div>
       <div class="account">
         <span class="account-email" id="accountEmail"></span>
+        <button class="btn-subs" onclick="showDiscover()">Discover</button>
         <button class="btn-subs" onclick="showInbox()">Inbox</button>
         <button class="btn-subs" onclick="toggleSubsTray()">
           Subscriptions
@@ -207,6 +208,12 @@
     <div class="inbox-view hidden" id="inboxView">
       <p class="section-label">Your summaries</p>
       <div class="inbox-list" id="inboxList"></div>
+    </div>
+
+    <div class="inbox-view hidden" id="discoverView">
+      <p class="section-label">Recommended for you</p>
+      <p class="tray-section-hint">Episodes featuring people and topics you follow.</p>
+      <div class="inbox-list" id="discoverList"></div>
     </div>
 
   </main>

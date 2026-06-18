@@ -10,6 +10,7 @@ const state = {
   people: [],
   topics: [],
   deliveries: [],
+  recommendations: [],
   trayOpen: false,
   loadingTimer: null,
 };
@@ -149,6 +150,7 @@ function renderResults(query) {
   document.getElementById('emptyState').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
   document.getElementById('inboxView').classList.add('hidden');
+  document.getElementById('discoverView').classList.add('hidden');
   section.classList.remove('hidden');
 
   label.textContent = state.searchResults.length ? `${state.searchResults.length} results for "${query}"` : '';
@@ -178,6 +180,7 @@ function clearResults() {
   document.getElementById('searchResults').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
   document.getElementById('inboxView').classList.add('hidden');
+  document.getElementById('discoverView').classList.add('hidden');
   document.getElementById('emptyState').classList.remove('hidden');
   state.currentPodcast = null;
   state.episodes = [];
@@ -189,6 +192,7 @@ function selectPodcast(podcast) {
   state.currentPodcast = podcast;
   document.getElementById('searchResults').classList.add('hidden');
   document.getElementById('inboxView').classList.add('hidden');
+  document.getElementById('discoverView').classList.add('hidden');
   document.getElementById('podcastDetail').classList.remove('hidden');
 
   const artwork = podcast.artwork || '';
@@ -492,6 +496,7 @@ async function showInbox() {
   document.getElementById('searchResults').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
   document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('discoverView').classList.add('hidden');
   document.getElementById('inboxView').classList.remove('hidden');
   document.getElementById('inboxList').innerHTML = skeletons(4);
   try {
@@ -535,6 +540,62 @@ function openDeliverySummary(i) {
   const d = state.deliveries[i];
   openPanel(d.episode_title, d.podcast_title);
   showSummaryInPanel(d.summary_md || '_Summary not available yet._', d.transcript_source);
+}
+
+/* ── DISCOVER (recommendations) ────────────────────────── */
+async function showDiscover() {
+  document.getElementById('searchResults').classList.add('hidden');
+  document.getElementById('podcastDetail').classList.add('hidden');
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('inboxView').classList.add('hidden');
+  document.getElementById('discoverView').classList.remove('hidden');
+  document.getElementById('discoverList').innerHTML = skeletons(4);
+  try {
+    const data = await api('/api/recommendations');
+    state.recommendations = data.recommendations || [];
+    renderDiscover();
+  } catch (e) {
+    document.getElementById('discoverList').innerHTML = `<p class="no-results">${esc(e.message)}</p>`;
+  }
+}
+
+function renderDiscover() {
+  const list = document.getElementById('discoverList');
+  list.innerHTML = '';
+  if (!state.recommendations.length) {
+    list.innerHTML = '<p class="no-results">No recommendations yet. Follow some people or topics, then check back as new episodes are scanned.</p>';
+    return;
+  }
+  state.recommendations.forEach((r, i) => {
+    const date = r.published_at
+      ? new Date(r.published_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : '';
+    const meta = [r.podcast_title, date].filter(Boolean).join(' · ');
+    const el = document.createElement('div');
+    el.className = 'inbox-item';
+    el.innerHTML = `
+      ${r.artwork_url ? `<img class="inbox-art" src="${esc(r.artwork_url)}" alt="" onerror="this.style.visibility='hidden'" />`
+                      : '<div class="inbox-art"></div>'}
+      <div class="inbox-body">
+        <p class="inbox-ep">${esc(r.episode_title)}</p>
+        <p class="inbox-meta">${esc(meta)}</p>
+        ${reasonBadges(r.reasons)}
+      </div>`;
+    el.addEventListener('click', () => openRecSummary(i));
+    list.appendChild(el);
+  });
+}
+
+async function openRecSummary(i) {
+  const r = state.recommendations[i];
+  openPanel(r.episode_title, r.podcast_title);
+  try {
+    const data = await api(`/api/episodes/${r.episode_id}/summarize`, 'POST');
+    showSummaryInPanel(data.summary, data.source);
+  } catch (e) {
+    closePanel();
+    showToast(e.message || 'Failed to generate summary', 'error');
+  }
 }
 
 /* ── SCAN STATUS BANNER ────────────────────────────────── */

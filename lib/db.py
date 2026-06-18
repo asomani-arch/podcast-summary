@@ -660,3 +660,91 @@ def set_episode_topics(episode_id: int, topics: list[str]) -> None:
                 """,
                 (episode_id, t, 0.8),
             )
+
+
+# ── Recommendations (Phase 5) ──────────────────────────────────────────────────
+
+def _rec_base(r: dict) -> dict:
+    return {
+        "episode_id":       r["id"],
+        "episode_title":    r["title"],
+        "published_at":     r["published_at"].isoformat() if r.get("published_at") else "",
+        "duration_seconds": r.get("duration_seconds"),
+        "podcast_title":    r.get("podcast_title"),
+        "artwork_url":      r.get("artwork_url"),
+        "reasons":          [],
+    }
+
+
+def recommend_episodes(user_id: str, limit: int = 20) -> list[dict]:
+    """Episodes matching the user's tracked people/topics that they haven't been
+    delivered — surfaces back-catalog discovery (docs/PRD.md §F8). Explicit signals
+    only."""
+    recs: dict[int, dict] = {}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT tp.person_id, p.name FROM tracked_people tp JOIN people p ON p.id = tp.person_id WHERE tp.user_id = %s",
+            (user_id,),
+        )
+        people = {r["person_id"]: r["name"] for r in cur.fetchall()}
+        cur.execute("SELECT topic FROM tracked_topics WHERE user_id = %s", (user_id,))
+        topics = [r["topic"] for r in cur.fetchall()]
+        if not people and not topics:
+            return []
+
+        if people:
+            cur.execute(
+                """
+                SELECT e.id, e.title, e.published_at, e.duration_seconds,
+                       p.title AS podcast_title, p.artwork_url, ep.person_id
+                FROM episode_people ep
+                JOIN episodes e ON e.id = ep.episode_id
+                JOIN podcasts p ON p.id = e.podcast_id
+                WHERE ep.person_id = ANY(%s)
+                  AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.user_id = %s AND d.episode_id = e.id)
+                ORDER BY e.published_at DESC NULLS LAST
+                LIMIT 100
+                """,
+                (list(people.keys()), user_id),
+            )
+            for r in cur.fetchall():
+                rec = recs.setdefault(r["id"], _rec_base(r))
+                rec["reasons"].append({"type": "person", "name": people.get(r["person_id"], "")})
+
+        for topic in topics:
+            tl = topic.lower()
+            cur.execute(
+                """
+                SELECT e.id, e.title, e.published_at, e.duration_seconds,
+                       p.title AS podcast_title, p.artwork_url
+                FROM episode_topics et
+                JOIN episodes e ON e.id = et.episode_id
+                JOIN podcasts p ON p.id = e.podcast_id
+                WHERE (lower(et.topic) LIKE %s OR %s LIKE '%%' || lower(et.topic) || '%%')
+                  AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.user_id = %s AND d.episode_id = e.id)
+                ORDER BY e.published_at DESC NULLS LAST
+                LIMIT 50
+                """,
+                (f"%{tl}%", tl, user_id),
+            )
+            for r in cur.fetchall():
+                rec = recs.setdefault(r["id"], _rec_base(r))
+                if not any(x["type"] == "topic" and x.get("topic") == topic for x in rec["reasons"]):
+                    rec["reasons"].append({"type": "topic", "topic": topic})
+
+    out = sorted(recs.values(), key=lambda x: x["published_at"], reverse=True)
+    return out[:limit]
+
+
+def get_episode_full(episode_id: int) -> dict | None:
+    """Episode row joined with its podcast — enough to (re)summarize on demand."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT e.*, p.rss_url, p.title AS podcast_title, p.artwork_url
+            FROM episodes e JOIN podcasts p ON p.id = e.podcast_id
+            WHERE e.id = %s
+            """,
+            (episode_id,),
+        )
+        return cur.fetchone()
