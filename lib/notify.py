@@ -34,3 +34,33 @@ def send_summary_email(
         "html": body_html,
     })
     return result.get("id", "")
+
+
+def send_digest_email(to_email: str, items: list[dict]) -> str:
+    """Send one batched digest email covering several episode summaries.
+    `items` = [{podcast_title, episode_title, summary_md}, ...]."""
+    blocks = []
+    for it in items:
+        blocks.append(
+            f'<h2 style="font-size:1.15rem;color:#1a1a2e;margin:1.75rem 0 0.1rem;">{it.get("episode_title","")}</h2>'
+            f'<p style="color:#888;margin:0 0 0.5rem;font-size:0.85rem;">{it.get("podcast_title","")}</p>'
+            f'{markdown(it.get("summary_md") or "")}'
+            '<hr style="border:none;border-top:1px solid #eee;margin:1.5rem 0 0;" />'
+        )
+    body_html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 640px; margin: 0 auto; color: #222;">
+      <h1 style="font-size: 1.3rem; color: #1a1a2e;">Your podcast digest</h1>
+      <p style="color: #888; margin-top: 0;">{len(items)} new episode{'s' if len(items) != 1 else ''} summarized.</p>
+      <hr style="border: none; border-top: 1px solid #eee; margin: 1rem 0;" />
+      {''.join(blocks)}
+      <p style="color: #aaa; font-size: 0.8rem; margin-top: 1.5rem;">Sent by your podcast-summary agent.</p>
+    </div>
+    """
+    sender = os.getenv("RESEND_FROM", "Podcast Summary <onboarding@resend.dev>")
+    result = _client().Emails.send({
+        "from": sender,
+        "to": [to_email],
+        "subject": f"🎙️ Your podcast digest — {len(items)} new episode{'s' if len(items) != 1 else ''}",
+        "html": body_html,
+    })
+    return result.get("id", "")

@@ -7,7 +7,9 @@ const state = {
   currentPodcast: null,
   episodes: [],
   subscriptions: [],
+  deliveries: [],
   trayOpen: false,
+  loadingTimer: null,
 };
 
 const CADENCE_LABELS = { instant: 'Instant', daily: 'Daily digest', weekly: 'Weekly digest' };
@@ -144,6 +146,7 @@ function renderResults(query) {
   const label = document.getElementById('resultsLabel');
   document.getElementById('emptyState').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
+  document.getElementById('inboxView').classList.add('hidden');
   section.classList.remove('hidden');
 
   label.textContent = state.searchResults.length ? `${state.searchResults.length} results for "${query}"` : '';
@@ -172,6 +175,7 @@ function renderResults(query) {
 function clearResults() {
   document.getElementById('searchResults').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
+  document.getElementById('inboxView').classList.add('hidden');
   document.getElementById('emptyState').classList.remove('hidden');
   state.currentPodcast = null;
   state.episodes = [];
@@ -182,6 +186,7 @@ function clearResults() {
 function selectPodcast(podcast) {
   state.currentPodcast = podcast;
   document.getElementById('searchResults').classList.add('hidden');
+  document.getElementById('inboxView').classList.add('hidden');
   document.getElementById('podcastDetail').classList.remove('hidden');
 
   const artwork = podcast.artwork || '';
@@ -409,6 +414,7 @@ function toggleSubsTray() {
     tray.classList.add('open');
     backdrop.classList.remove('hidden');
     loadSubscriptions();
+    loadStatus();
   } else {
     tray.classList.remove('open');
     backdrop.classList.add('hidden');
@@ -475,6 +481,79 @@ async function unsubscribeSub(podcastId, btn) {
     showToast('Failed to unsubscribe: ' + e.message, 'error');
     btn.disabled = false;
   }
+}
+
+/* ── INBOX (delivered summaries) ───────────────────────── */
+async function showInbox() {
+  document.getElementById('searchResults').classList.add('hidden');
+  document.getElementById('podcastDetail').classList.add('hidden');
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('inboxView').classList.remove('hidden');
+  document.getElementById('inboxList').innerHTML = skeletons(4);
+  try {
+    const data = await api('/api/deliveries');
+    state.deliveries = data.deliveries || [];
+    renderInbox();
+  } catch (e) {
+    document.getElementById('inboxList').innerHTML =
+      `<p class="no-results">${esc(e.message)}</p>`;
+  }
+}
+
+function renderInbox() {
+  const list = document.getElementById('inboxList');
+  list.innerHTML = '';
+  if (!state.deliveries.length) {
+    list.innerHTML = '<p class="no-results">No summaries yet. Subscribe to a show and new episodes will land here.</p>';
+    return;
+  }
+  state.deliveries.forEach((d, i) => {
+    const date = d.published_at
+      ? new Date(d.published_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : '';
+    const meta = [d.podcast_title, date].filter(Boolean).join(' · ');
+    const el = document.createElement('div');
+    el.className = 'inbox-item';
+    el.innerHTML = `
+      ${d.artwork_url ? `<img class="inbox-art" src="${esc(d.artwork_url)}" alt="" onerror="this.style.visibility='hidden'" />`
+                      : '<div class="inbox-art"></div>'}
+      <div class="inbox-body">
+        <p class="inbox-ep">${esc(d.episode_title)}</p>
+        <p class="inbox-meta">${esc(meta)}</p>
+      </div>`;
+    el.addEventListener('click', () => openDeliverySummary(i));
+    list.appendChild(el);
+  });
+}
+
+function openDeliverySummary(i) {
+  const d = state.deliveries[i];
+  openPanel(d.episode_title, d.podcast_title);
+  showSummaryInPanel(d.summary_md || '_Summary not available yet._', d.transcript_source);
+}
+
+/* ── SCAN STATUS BANNER ────────────────────────────────── */
+async function loadStatus() {
+  const el = document.getElementById('trayStatus');
+  if (!el) return;
+  try {
+    const data = await api('/api/status');
+    renderStatus(el, data.last_run);
+  } catch (_) {
+    el.textContent = '';
+  }
+}
+
+function renderStatus(el, run) {
+  if (!run) {
+    el.textContent = 'No checks have run yet.';
+    return;
+  }
+  const errs = Array.isArray(run.errors) ? run.errors : [];
+  const when = run.started_at ? new Date(run.started_at).toLocaleString() : '';
+  el.innerHTML = errs.length
+    ? `<span class="status-error">Last check ${esc(when)} — ${errs.length} issue${errs.length === 1 ? '' : 's'}</span>`
+    : `Last check ${esc(when)} · ${run.episodes_matched || 0} new delivered`;
 }
 
 /* ── API HELPER ────────────────────────────────────────── */

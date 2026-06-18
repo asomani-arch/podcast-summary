@@ -52,6 +52,20 @@
     .loading-preview-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
       color: var(--text-3); margin-bottom: 8px; }
     .loading-preview p { color: var(--text-2); font-size: .88rem; line-height: 1.55; }
+    /* In-app inbox (delivered summaries) */
+    .inbox-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+    .inbox-item { display: flex; align-items: center; gap: 14px; padding: 14px; background: var(--surface);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer;
+      transition: border-color .15s, background .15s; }
+    .inbox-item:hover { background: var(--surface-2); border-color: var(--border-bright); }
+    .inbox-art { width: 48px; height: 48px; border-radius: var(--radius-xs); object-fit: cover;
+      flex-shrink: 0; background: var(--surface-3); }
+    .inbox-body { flex: 1; min-width: 0; }
+    .inbox-ep { font-weight: 600; font-size: .95rem; color: var(--text); margin: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .inbox-meta { color: var(--text-2); font-size: .8rem; margin: .2rem 0 0; }
+    .tray-status { font-size: .8rem; color: var(--text-2); padding: 0 0 12px; }
+    .tray-status .status-error { color: var(--danger); }
   </style>
 </head>
 <body>
@@ -85,6 +99,7 @@
       </div>
       <div class="account">
         <span class="account-email" id="accountEmail"></span>
+        <button class="btn-subs" onclick="showInbox()">Inbox</button>
         <button class="btn-subs" onclick="toggleSubsTray()">
           Subscriptions
           <span class="badge" id="subCount">0</span>
@@ -168,6 +183,11 @@
       </div>
     </div>
 
+    <div class="inbox-view hidden" id="inboxView">
+      <p class="section-label">Your summaries</p>
+      <div class="inbox-list" id="inboxList"></div>
+    </div>
+
   </main>
 
   <!-- Summary Panel -->
@@ -208,6 +228,7 @@
         <option value="weekly">Weekly digest</option>
       </select>
     </div>
+    <div class="tray-status" id="trayStatus"></div>
     <div class="subs-list" id="subsList"></div>
   </div>
 

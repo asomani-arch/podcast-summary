@@ -6,9 +6,10 @@ once-per-episode and reused across users (fixed PE lens). See docs/PRD.md.
 """
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -17,6 +18,7 @@ sys.path.append(str(Path(__file__).parent))
 from lib import catalog
 from lib import db
 from lib.auth import User, current_user, optional_user
+from lib.notify import send_digest_email, send_summary_email
 from lib.summarizer import SUMMARY_STYLE_VERSION, strip_summary_marker, summarize
 from lib.transcripts import get_transcript
 
@@ -24,6 +26,13 @@ app = FastAPI(title="PodcastAI")
 
 MANUAL_SUMMARY_DAILY_CAP = 4   # newly-generated, on-demand summaries per user/day
 SUMMARY_MODEL = "gemini-2.5-flash"
+SCAN_SECRET = os.getenv("SCAN_SECRET", "")
+RSS_SCAN_WINDOW = 8            # newest N episodes per feed checked each scan tick
+
+
+def _require_scan_secret(secret: str) -> None:
+    if not SCAN_SECRET or secret != SCAN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized.")
 
 
 # ── Static redirect ────────────────────────────────────────────────────────────
@@ -240,3 +249,130 @@ def update_subscription(
         return {"subscription": sub}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── In-app reader (inbox) ──────────────────────────────────────────────────────
+
+@app.get("/api/deliveries")
+def deliveries(user: User = Depends(current_user)):
+    return {"deliveries": db.list_deliveries(user.id)}
+
+
+# ── Scan + delivery pipeline (called by the external scheduler) ─────────────────
+
+@app.post("/api/scan")
+def scan(x_scan_secret: str = Header(default="")):
+    """Check every subscribed podcast for new episodes, summarize, and deliver.
+    Protected by a shared secret so only the scheduler can trigger it."""
+    _require_scan_secret(x_scan_secret)
+    started = datetime.utcnow()
+    stats = {"shows": 0, "ingested": 0, "matched": 0, "summarized": 0, "emails": 0}
+    errors: list[str] = []
+    for podcast in db.distinct_subscribed_podcasts():
+        stats["shows"] += 1
+        try:
+            _scan_podcast(podcast, stats, errors)
+        except Exception as e:
+            errors.append(f"podcast {podcast['id']} ({podcast.get('title','?')}): {e}")
+    run_id = db.record_scan_run(
+        started, stats["shows"], stats["ingested"], stats["matched"],
+        stats["summarized"], stats["emails"], errors,
+    )
+    return {"run_id": run_id, **stats, "errors": errors}
+
+
+def _scan_podcast(podcast: dict, stats: dict, errors: list) -> None:
+    episodes = catalog.episodes_from_rss(podcast["rss_url"], max_results=RSS_SCAN_WINDOW)
+    subs = db.subscribers_for_podcast(podcast["id"])
+    if not subs:
+        return
+
+    for ep in episodes:
+        pub = db.parse_dt(ep.get("published_at"))
+        if not pub:
+            continue
+        # Only deliver episodes published after a user subscribed (no back-catalog blast).
+        eligible = [s for s in subs if s.get("created_at") and s["created_at"] < pub]
+        if not eligible:
+            continue
+
+        episode_id = db.upsert_episode(
+            podcast["id"], ep["guid"], title=ep["title"], description=ep["description"],
+            audio_url=ep["audio_url"], episode_url=ep["episode_url"],
+            published_at=pub, duration_seconds=ep.get("duration_seconds"),
+        )
+        stats["ingested"] += 1
+
+        # Summarize once per episode (shared cache across all users).
+        cached = db.get_episode_summary(episode_id)
+        if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
+            summary_md = cached["summary_md"]
+        else:
+            text, source = get_transcript(
+                podcast["title"], ep["title"], ep["description"],
+                ep["audio_url"], ep["episode_url"],
+                transcript_url=ep.get("transcript_url", ""),
+                transcript_type=ep.get("transcript_type", ""),
+            )
+            if not text:
+                errors.append(f"no transcript: {podcast.get('title','?')} — {ep.get('title','?')}")
+                continue
+            summary_md = strip_summary_marker(summarize(
+                podcast["title"], ep["title"], text,
+                transcript_source=source, episode_duration=ep.get("duration_seconds"),
+            ))
+            db.save_episode_summary(
+                episode_id, summary_md=summary_md, transcript_source=source,
+                model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION,
+            )
+            stats["summarized"] += 1
+
+        for s in eligible:
+            did = db.create_delivery(
+                s["user_id"], episode_id,
+                [{"type": "show", "podcast_id": podcast["id"]}], status="queued",
+            )
+            if did is None:
+                continue  # already delivered to this user
+            stats["matched"] += 1
+            if s["cadence"] == "instant":
+                try:
+                    send_summary_email(s["email"], podcast["title"], ep["title"], summary_md)
+                    stats["emails"] += 1
+                except Exception as e:
+                    errors.append(f"email {s['email']}: {e}")
+                db.mark_delivery_sent(did)
+
+
+@app.post("/api/digest")
+def digest(cadence: str = Query("daily"), x_scan_secret: str = Header(default="")):
+    """Send batched digests for a cadence ('daily'|'weekly'). Marks deliveries sent
+    even if the email can't go out yet (the in-app reader always has them)."""
+    _require_scan_secret(x_scan_secret)
+    if cadence not in ("daily", "weekly"):
+        raise HTTPException(status_code=400, detail="cadence must be 'daily' or 'weekly'.")
+
+    by_user: dict[str, dict] = {}
+    for r in db.queued_deliveries(cadence):
+        u = by_user.setdefault(r["user_id"], {"email": r["email"], "items": [], "ids": []})
+        u["items"].append(r)
+        u["ids"].append(r["id"])
+
+    sent, errors = 0, []
+    for data in by_user.values():
+        try:
+            send_digest_email(data["email"], data["items"])
+            sent += 1
+        except Exception as e:
+            errors.append(f"digest {data['email']}: {e}")
+        for did in data["ids"]:
+            db.mark_delivery_sent(did)
+    return {"users": len(by_user), "emails_sent": sent, "errors": errors}
+
+
+# ── Scan status (for the in-app banner) ────────────────────────────────────────
+
+@app.get("/api/status")
+def status():
+    runs = db.get_recent_scan_runs(limit=5)
+    return {"last_run": runs[0] if runs else None, "recent_runs": runs}

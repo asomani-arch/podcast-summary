@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Json
 
 VALID_CADENCES = {"instant", "daily", "weekly"}
 
@@ -332,3 +333,133 @@ def record_engagement(user_id: str, episode_id: int, action: str) -> None:
             "INSERT INTO engagement (user_id, episode_id, action) VALUES (%s, %s, %s)",
             (user_id, episode_id, action),
         )
+
+
+# ── Scan + delivery pipeline (Phase 2) ─────────────────────────────────────────
+
+def distinct_subscribed_podcasts() -> list[dict]:
+    """Every podcast with at least one active subscriber (one row per podcast)."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT p.id, p.rss_url, p.pi_feed_id, p.title, p.publisher, p.artwork_url
+            FROM podcasts p JOIN subscriptions s ON s.podcast_id = p.id
+            """
+        )
+        return cur.fetchall()
+
+
+def subscribers_for_podcast(podcast_id: int) -> list[dict]:
+    """Subscribers of a podcast with their effective cadence (override or default)
+    and the time they subscribed (so we never deliver back-catalog episodes)."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.user_id, s.created_at, pr.email,
+                   COALESCE(s.cadence_override, pr.default_cadence, 'instant') AS cadence
+            FROM subscriptions s
+            JOIN profiles pr ON pr.user_id = s.user_id
+            WHERE s.podcast_id = %s
+            """,
+            (podcast_id,),
+        )
+        return cur.fetchall()
+
+
+def create_delivery(user_id: str, episode_id: int, reasons: list, status: str = "queued") -> int | None:
+    """Create a delivery row; returns its id, or None if one already exists for this
+    (user, episode) — the dedup guarantee (docs/PRD.md §9)."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO deliveries (user_id, episode_id, reasons, status)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id, episode_id) DO NOTHING
+            RETURNING id
+            """,
+            (user_id, episode_id, Json(reasons), status),
+        )
+        row = cur.fetchone()
+        return row["id"] if row else None
+
+
+def mark_delivery_sent(delivery_id: int) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE deliveries SET status = 'sent', sent_at = NOW() WHERE id = %s",
+            (delivery_id,),
+        )
+
+
+def queued_deliveries(cadence: str) -> list[dict]:
+    """Queued deliveries whose effective cadence matches `cadence` ('daily'|'weekly'),
+    with everything a digest email needs. Effective cadence is recomputed via join."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.id, d.user_id, d.episode_id, d.reasons,
+                   e.title AS episode_title, p.title AS podcast_title,
+                   es.summary_md, pr.email
+            FROM deliveries d
+            JOIN episodes e ON e.id = d.episode_id
+            JOIN podcasts p ON p.id = e.podcast_id
+            JOIN profiles pr ON pr.user_id = d.user_id
+            LEFT JOIN subscriptions s ON s.user_id = d.user_id AND s.podcast_id = e.podcast_id
+            LEFT JOIN episode_summaries es ON es.episode_id = d.episode_id
+            WHERE d.status = 'queued'
+              AND COALESCE(s.cadence_override, pr.default_cadence, 'instant') = %s
+            ORDER BY d.user_id, e.published_at DESC NULLS LAST
+            """,
+            (cadence,),
+        )
+        return cur.fetchall()
+
+
+def list_deliveries(user_id: str, limit: int = 50) -> list[dict]:
+    """A user's delivered/queued summaries — powers the in-app reader (docs/PRD.md §8)."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.id, d.episode_id, d.reasons, d.status, d.created_at,
+                   e.title AS episode_title, e.published_at, e.duration_seconds,
+                   p.title AS podcast_title, p.artwork_url,
+                   es.summary_md, es.transcript_source
+            FROM deliveries d
+            JOIN episodes e ON e.id = d.episode_id
+            JOIN podcasts p ON p.id = e.podcast_id
+            LEFT JOIN episode_summaries es ON es.episode_id = d.episode_id
+            WHERE d.user_id = %s
+            ORDER BY d.created_at DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        )
+        return cur.fetchall()
+
+
+def record_scan_run(started_at, shows_scanned: int, episodes_ingested: int,
+                    episodes_matched: int, summaries_generated: int,
+                    emails_sent: int, errors: list) -> int:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO scan_runs (started_at, shows_scanned, episodes_ingested,
+                                   episodes_matched, summaries_generated, emails_sent, errors, ok)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (started_at, shows_scanned, episodes_ingested, episodes_matched,
+             summaries_generated, emails_sent, Json(errors), not errors),
+        )
+        return cur.fetchone()["id"]
+
+
+def get_recent_scan_runs(limit: int = 5) -> list[dict]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT %s", (limit,))
+        rows = cur.fetchall()
+        for r in rows:
+            for k in ("started_at", "finished_at"):
+                if r.get(k):
+                    r[k] = r[k].isoformat()
+        return rows
