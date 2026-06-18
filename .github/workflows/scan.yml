@@ -1,0 +1,39 @@
+name: podcast-scan
+
+# Drives the v5 delivery pipeline on a schedule (the "external scheduler" from
+# the PRD — keeps us on Vercel's free tier). Scheduled workflows run from the
+# default branch and use the repo's SCAN_SECRET secret.
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # check subscribed shows for new episodes, every 30 min
+    - cron: '0 13 * * *'     # daily digest at 13:00 UTC
+    - cron: '0 14 * * 1'     # weekly digest, Mondays at 14:00 UTC
+  workflow_dispatch:         # allow manual runs for testing
+    inputs:
+      action:
+        description: 'scan | digest-daily | digest-weekly'
+        default: scan
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit the endpoint
+        env:
+          SECRET: ${{ secrets.SCAN_SECRET }}
+          BASE: https://podcast-summary-eight.vercel.app
+        run: |
+          SCHED='${{ github.event.schedule }}'
+          MANUAL='${{ github.event.inputs.action }}'
+          if [ "$SCHED" = '0 13 * * *' ] || [ "$MANUAL" = 'digest-daily' ]; then
+            URL="$BASE/api/digest?cadence=daily"
+          elif [ "$SCHED" = '0 14 * * 1' ] || [ "$MANUAL" = 'digest-weekly' ]; then
+            URL="$BASE/api/digest?cadence=weekly"
+          else
+            URL="$BASE/api/scan"
+          fi
+          echo "POST $URL"
+          code=$(curl -s -o /tmp/out.json -w '%{http_code}' -X POST "$URL" -H "x-scan-secret: $SECRET")
+          echo "HTTP $code"
+          cat /tmp/out.json; echo
+          test "$code" = "200"
