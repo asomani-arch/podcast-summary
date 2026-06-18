@@ -259,6 +259,14 @@
       <button type="submit">Add</button>
     </form>
     <div class="people-list" id="peopleList"></div>
+
+    <div class="tray-section-label">Topics you follow</div>
+    <p class="tray-section-hint">Get a summary when an episode substantially covers a topic.</p>
+    <form class="people-add" onsubmit="return addTopic(event)">
+      <input type="text" id="topicInput" placeholder="Add a topic — e.g. AI infrastructure" autocomplete="off" spellcheck="false" />
+      <button type="submit">Add</button>
+    </form>
+    <div class="people-list" id="topicsList"></div>
   </div>
 
   <!-- Toast -->

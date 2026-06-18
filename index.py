@@ -292,6 +292,32 @@ def untrack_person(person_id: int = Query(...), user: User = Depends(current_use
     return {"ok": True}
 
 
+# ── Topic tracking ─────────────────────────────────────────────────────────────
+
+class TrackTopicRequest(BaseModel):
+    topic: str
+
+
+@app.get("/api/topics")
+def topics(user: User = Depends(current_user)):
+    return {"topics": db.list_tracked_topics(user.id)}
+
+
+@app.post("/api/topics")
+def track_topic(req: TrackTopicRequest, user: User = Depends(current_user)):
+    topic = (req.topic or "").strip()
+    if len(topic) < 2:
+        raise HTTPException(status_code=400, detail="Enter a topic.")
+    db.ensure_profile(user.id, user.email)
+    return {"topic": db.add_tracked_topic(user.id, topic)}
+
+
+@app.delete("/api/topics")
+def untrack_topic(topic_id: int = Query(...), user: User = Depends(current_user)):
+    db.remove_tracked_topic(user.id, topic_id)
+    return {"ok": True}
+
+
 # ── In-app reader (inbox) ──────────────────────────────────────────────────────
 
 @app.get("/api/deliveries")
@@ -311,12 +337,13 @@ def scan(x_scan_secret: str = Header(default="")):
     stats = {"shows": 0, "ingested": 0, "matched": 0, "summarized": 0, "emails": 0}
     errors: list[str] = []
     tp_index = db.tracked_people_index()   # normalized name -> [(user_id, tracked_since)]
+    tt_index = db.tracked_topics_index()   # [(topic_lower, user_id, tracked_since)]
     contacts: dict[str, dict] = {}         # user_id -> {email, cadence}
     targets = db.scan_targets(popular_batch=POPULAR_SCAN_BATCH)
     for podcast in targets:
         stats["shows"] += 1
         try:
-            _scan_podcast(podcast, tp_index, contacts, stats, errors)
+            _scan_podcast(podcast, tp_index, tt_index, contacts, stats, errors)
         except Exception as e:
             errors.append(f"podcast {podcast['id']} ({podcast.get('title','?')}): {e}")
     db.mark_scanned([p["id"] for p in targets])
@@ -327,9 +354,26 @@ def scan(x_scan_secret: str = Header(default="")):
     return {"run_id": run_id, **stats, "errors": errors}
 
 
-def _scan_podcast(podcast: dict, tp_index: dict, contacts: dict, stats: dict, errors: list) -> None:
+def _topic_matches(tracked_lower: str, ext_topics: list, ep: dict) -> bool:
+    """A tracked topic matches if it relates to a main extracted topic (bidirectional
+    substring) or appears in the episode title/description."""
+    for t in ext_topics:
+        tl = t.lower()
+        if tracked_lower in tl or tl in tracked_lower:
+            return True
+    blob = f"{ep.get('title','')} {ep.get('description','')}".lower()
+    return tracked_lower in blob
+
+
+def _scan_podcast(podcast: dict, tp_index: dict, tt_index: list, contacts: dict, stats: dict, errors: list) -> None:
     episodes = catalog.episodes_from_rss(podcast["rss_url"], max_results=RSS_SCAN_WINDOW)
     subs = db.subscribers_for_podcast(podcast["id"])
+
+    def _contact(uid: str) -> None:
+        if uid not in contacts:
+            c = db.profile_contact(uid)
+            if c:
+                contacts[uid] = {"email": c["email"], "cadence": c["cadence"]}
 
     for ep in episodes:
         pub = db.parse_dt(ep.get("published_at"))
@@ -350,9 +394,10 @@ def _scan_podcast(podcast: dict, tp_index: dict, contacts: dict, stats: dict, er
                 user_reasons.setdefault(uid, []).append({"type": "show", "podcast_id": podcast["id"]})
                 contacts[uid] = {"email": s["email"], "cadence": s["cadence"]}
 
-        # 2. Tracked-person matches (cheap metadata extraction, only if anyone tracks anyone).
+        # 2. Tracked person/topic matches (cheap metadata extraction, only if anyone tracks anything).
         people_rows = []
-        if tp_index:
+        ext_topics: list = []
+        if tp_index or tt_index:
             ext = extract.extract_people_and_topics(
                 podcast["title"], ep["title"], ep.get("description", ""), ep.get("persons"),
             )
@@ -362,10 +407,12 @@ def _scan_podcast(podcast: dict, tp_index: dict, contacts: dict, stats: dict, er
                 for uid, since in tp_index.get(db._normalize_name(name), []):
                     if since and since < pub:
                         user_reasons.setdefault(uid, []).append({"type": "person", "name": name})
-                        if uid not in contacts:
-                            c = db.profile_contact(uid)
-                            if c:
-                                contacts[uid] = {"email": c["email"], "cadence": c["cadence"]}
+                        _contact(uid)
+            ext_topics = ext.get("topics", [])
+            for t_lower, uid, since in tt_index:
+                if since and since < pub and _topic_matches(t_lower, ext_topics, ep):
+                    user_reasons.setdefault(uid, []).append({"type": "topic", "topic": t_lower})
+                    _contact(uid)
 
         # Always ingest so we don't re-extract this episode next tick.
         episode_id = db.upsert_episode(
@@ -376,6 +423,8 @@ def _scan_podcast(podcast: dict, tp_index: dict, contacts: dict, stats: dict, er
         stats["ingested"] += 1
         if people_rows:
             db.set_episode_people(episode_id, people_rows)
+        if ext_topics:
+            db.set_episode_topics(episode_id, ext_topics)
 
         if not user_reasons:
             continue  # seen + indexed, but nobody is waiting on it

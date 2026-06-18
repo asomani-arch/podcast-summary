@@ -8,6 +8,7 @@ const state = {
   episodes: [],
   subscriptions: [],
   people: [],
+  topics: [],
   deliveries: [],
   trayOpen: false,
   loadingTimer: null,
@@ -417,6 +418,7 @@ function toggleSubsTray() {
     loadSubscriptions();
     loadStatus();
     loadPeople();
+    loadTopics();
   } else {
     tray.classList.remove('open');
     backdrop.classList.add('hidden');
@@ -605,6 +607,57 @@ async function removePerson(personId) {
   try {
     await api(`/api/people?person_id=${personId}`, 'DELETE');
     await loadPeople();
+  } catch (e) {
+    showToast('Failed to remove: ' + e.message, 'error');
+  }
+}
+
+/* ── TOPIC TRACKING ────────────────────────────────────── */
+async function loadTopics() {
+  try {
+    const data = await api('/api/topics');
+    state.topics = data.topics || [];
+    renderTopics();
+  } catch (_) {}
+}
+
+function renderTopics() {
+  const list = document.getElementById('topicsList');
+  if (!list) return;
+  if (!state.topics.length) {
+    list.innerHTML = '<p class="no-subs">No topics yet. Add one above.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  state.topics.forEach(t => {
+    const el = document.createElement('div');
+    el.className = 'person-item';
+    el.innerHTML = `<span class="person-name">${esc(t.topic)}</span>
+      <button class="person-remove" onclick="removeTopic(${t.id})">Remove</button>`;
+    list.appendChild(el);
+  });
+}
+
+async function addTopic(event) {
+  event.preventDefault();
+  const input = document.getElementById('topicInput');
+  const topic = input.value.trim();
+  if (topic.length < 2) return false;
+  try {
+    await api('/api/topics', 'POST', { topic });
+    input.value = '';
+    await loadTopics();
+    showToast(`Now following "${topic}"`, 'success');
+  } catch (e) {
+    showToast('Failed to add: ' + e.message, 'error');
+  }
+  return false;
+}
+
+async function removeTopic(topicId) {
+  try {
+    await api(`/api/topics?topic_id=${topicId}`, 'DELETE');
+    await loadTopics();
   } catch (e) {
     showToast('Failed to remove: ' + e.message, 'error');
   }

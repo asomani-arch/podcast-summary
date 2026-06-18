@@ -606,3 +606,57 @@ def mark_scanned(podcast_ids: list[int]) -> None:
         return
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("UPDATE podcasts SET last_scanned_at = NOW() WHERE id = ANY(%s)", (podcast_ids,))
+
+
+# ── Tracked topics (Phase 4) ───────────────────────────────────────────────────
+
+def add_tracked_topic(user_id: str, topic: str) -> dict:
+    topic = " ".join((topic or "").split())
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tracked_topics (user_id, topic)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, lower(topic)) DO UPDATE SET topic = EXCLUDED.topic
+            RETURNING id, topic
+            """,
+            (user_id, topic),
+        )
+        return cur.fetchone()
+
+
+def remove_tracked_topic(user_id: str, topic_id: int) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM tracked_topics WHERE user_id = %s AND id = %s",
+            (user_id, topic_id),
+        )
+
+
+def list_tracked_topics(user_id: str) -> list[dict]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, topic, created_at FROM tracked_topics WHERE user_id = %s ORDER BY created_at DESC",
+            (user_id,),
+        )
+        return cur.fetchall()
+
+
+def tracked_topics_index() -> list[tuple]:
+    """All tracked topics as (topic_lower, user_id, tracked_since) for scan matching."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT lower(topic) AS t, user_id, created_at FROM tracked_topics")
+        return [(r["t"], str(r["user_id"]), r["created_at"]) for r in cur.fetchall()]
+
+
+def set_episode_topics(episode_id: int, topics: list[str]) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        for t in topics:
+            cur.execute(
+                """
+                INSERT INTO episode_topics (episode_id, topic, confidence)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (episode_id, topic) DO NOTHING
+                """,
+                (episode_id, t, 0.8),
+            )
