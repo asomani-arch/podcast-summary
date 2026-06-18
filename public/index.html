@@ -66,6 +66,27 @@
     .inbox-meta { color: var(--text-2); font-size: .8rem; margin: .2rem 0 0; }
     .tray-status { font-size: .8rem; color: var(--text-2); padding: 0 0 12px; }
     .tray-status .status-error { color: var(--danger); }
+    /* People tracking */
+    .tray-section-label { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--text-3); margin: 26px 0 4px; }
+    .tray-section-hint { font-size: .8rem; color: var(--text-2); margin: 0 0 12px; }
+    .people-add { display: flex; gap: 8px; margin-bottom: 12px; }
+    .people-add input { flex: 1; padding: 9px 12px; border: 1px solid var(--border-bright);
+      border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text);
+      font-family: inherit; font-size: .88rem; }
+    .people-add input::placeholder { color: var(--text-3); }
+    .people-add input:focus { outline: none; border-color: var(--accent); }
+    .people-add button { padding: 9px 14px; border: none; border-radius: var(--radius-sm);
+      background: var(--accent); color: #000; font-weight: 600; cursor: pointer; font-family: inherit; }
+    .person-item { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 9px 2px; border-bottom: 1px solid var(--border); }
+    .person-name { font-size: .9rem; color: var(--text); }
+    .person-remove { background: none; border: none; color: var(--text-2); cursor: pointer;
+      font-size: .78rem; font-family: inherit; }
+    .person-remove:hover { color: var(--danger); }
+    .inbox-reasons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; }
+    .reason-badge { font-size: .7rem; padding: 2px 8px; border-radius: 999px;
+      background: var(--accent-dim); color: var(--accent); }
   </style>
 </head>
 <body>
@@ -230,6 +251,14 @@
     </div>
     <div class="tray-status" id="trayStatus"></div>
     <div class="subs-list" id="subsList"></div>
+
+    <div class="tray-section-label">People you follow</div>
+    <p class="tray-section-hint">Get a summary whenever they appear on a show you follow or a popular podcast.</p>
+    <form class="people-add" onsubmit="return addPerson(event)">
+      <input type="text" id="personInput" placeholder="Add a person — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
+      <button type="submit">Add</button>
+    </form>
+    <div class="people-list" id="peopleList"></div>
   </div>
 
   <!-- Toast -->

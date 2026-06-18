@@ -463,3 +463,146 @@ def get_recent_scan_runs(limit: int = 5) -> list[dict]:
                 if r.get(k):
                     r[k] = r[k].isoformat()
         return rows
+
+
+# ── People & topics (Phases 3-4) ───────────────────────────────────────────────
+
+def _normalize_name(name: str) -> str:
+    return " ".join((name or "").split()).lower()
+
+
+def upsert_person(name: str) -> int:
+    """Get or create a canonical person by normalized name."""
+    norm = _normalize_name(name)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO people (name, normalized_name)
+            VALUES (%s, %s)
+            ON CONFLICT (normalized_name) DO UPDATE SET name = people.name
+            RETURNING id
+            """,
+            (name.strip(), norm),
+        )
+        return cur.fetchone()["id"]
+
+
+def add_tracked_person(user_id: str, name: str) -> dict:
+    person_id = upsert_person(name)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tracked_people (user_id, person_id)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, person_id) DO NOTHING
+            """,
+            (user_id, person_id),
+        )
+        cur.execute("SELECT name FROM people WHERE id = %s", (person_id,))
+        name_row = cur.fetchone()
+    return {"person_id": person_id, "name": name_row["name"] if name_row else name}
+
+
+def remove_tracked_person(user_id: str, person_id: int) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM tracked_people WHERE user_id = %s AND person_id = %s",
+            (user_id, person_id),
+        )
+
+
+def list_tracked_people(user_id: str) -> list[dict]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT tp.person_id, p.name, tp.created_at
+            FROM tracked_people tp JOIN people p ON p.id = tp.person_id
+            WHERE tp.user_id = %s
+            ORDER BY tp.created_at DESC
+            """,
+            (user_id,),
+        )
+        return cur.fetchall()
+
+
+def set_episode_people(episode_id: int, people_rows: list[dict]) -> None:
+    """Replace the extracted guests for an episode. people_rows = [{person_id,
+    confidence, source}]."""
+    with get_conn() as conn, conn.cursor() as cur:
+        for r in people_rows:
+            cur.execute(
+                """
+                INSERT INTO episode_people (episode_id, person_id, confidence, source)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (episode_id, person_id) DO UPDATE SET
+                    confidence = EXCLUDED.confidence, source = EXCLUDED.source
+                """,
+                (episode_id, r["person_id"], r.get("confidence"), r.get("source")),
+            )
+
+
+def tracked_people_index() -> dict[str, list[tuple]]:
+    """Map normalized_name -> [(user_id, tracked_since), ...] across all users, for
+    matching during scan (tracked_since is the watermark: no back-catalog)."""
+    out: dict[str, list[tuple]] = {}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.normalized_name, tp.user_id, tp.created_at
+            FROM tracked_people tp JOIN people p ON p.id = tp.person_id
+            """
+        )
+        for r in cur.fetchall():
+            out.setdefault(r["normalized_name"], []).append((str(r["user_id"]), r["created_at"]))
+    return out
+
+
+def profile_contact(user_id: str) -> dict | None:
+    """Minimal contact info for delivery: email + effective default cadence."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT email, COALESCE(default_cadence,'instant') AS cadence FROM profiles WHERE user_id = %s",
+            (user_id,),
+        )
+        return cur.fetchone()
+
+
+# ── Curated "popular" scan set ─────────────────────────────────────────────────
+
+def set_popular(podcast_id: int, is_popular: bool = True) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE podcasts SET is_popular = %s WHERE id = %s", (is_popular, podcast_id))
+
+
+def scan_targets(popular_batch: int = 8) -> list[dict]:
+    """Shows to scan this tick: every subscribed show (few, important) plus a
+    rotating batch of popular shows ordered by least-recently-scanned, so we
+    cycle the popular set across ticks and never blow the function timeout."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT p.id, p.rss_url, p.pi_feed_id, p.title, p.publisher, p.artwork_url
+            FROM podcasts p JOIN subscriptions s ON s.podcast_id = p.id
+            """
+        )
+        subscribed = cur.fetchall()
+        sub_ids = {r["id"] for r in subscribed}
+        cur.execute(
+            """
+            SELECT id, rss_url, pi_feed_id, title, publisher, artwork_url
+            FROM podcasts
+            WHERE is_popular = TRUE
+            ORDER BY last_scanned_at ASC NULLS FIRST
+            LIMIT %s
+            """,
+            (popular_batch,),
+        )
+        popular = [r for r in cur.fetchall() if r["id"] not in sub_ids]
+    return subscribed + popular
+
+
+def mark_scanned(podcast_ids: list[int]) -> None:
+    if not podcast_ids:
+        return
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE podcasts SET last_scanned_at = NOW() WHERE id = ANY(%s)", (podcast_ids,))

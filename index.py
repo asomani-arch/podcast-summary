@@ -17,6 +17,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from lib import catalog
 from lib import db
+from lib import extract
 from lib.auth import User, current_user, optional_user
 from lib.notify import send_digest_email, send_summary_email
 from lib.summarizer import SUMMARY_STYLE_VERSION, strip_summary_marker, summarize
@@ -28,6 +29,20 @@ MANUAL_SUMMARY_DAILY_CAP = 4   # newly-generated, on-demand summaries per user/d
 SUMMARY_MODEL = "gemini-2.5-flash"
 SCAN_SECRET = os.getenv("SCAN_SECRET", "")
 RSS_SCAN_WINDOW = 8            # newest N episodes per feed checked each scan tick
+POPULAR_SCAN_BATCH = 8         # popular shows scanned per tick (rotating, to fit the timeout)
+
+# Curated popular shows scanned for tracked-people appearances even when no one
+# subscribes — a PE-leaning mix plus the big interview shows where notable people
+# turn up. Resolved to feeds via the iTunes search at seed time.
+POPULAR_SHOW_NAMES = [
+    "Lex Fridman Podcast", "The Joe Rogan Experience", "Invest Like the Best",
+    "Acquired", "The Tim Ferriss Show", "All-In Podcast", "Lenny's Podcast",
+    "a16z Podcast", "Masters in Business", "Odd Lots", "The Knowledge Project",
+    "How I Built This", "Founders", "BG2 Pod", "Dwarkesh Podcast",
+    "The Diary Of A CEO", "The Twenty Minute VC", "Capital Allocators",
+    "We Study Billionaires", "Business Breakdowns", "Decoder with Nilay Patel",
+    "Hard Fork", "No Priors", "Stratechery",
+]
 
 
 def _require_scan_secret(secret: str) -> None:
@@ -251,6 +266,32 @@ def update_subscription(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ── People tracking ────────────────────────────────────────────────────────────
+
+class TrackPersonRequest(BaseModel):
+    name: str
+
+
+@app.get("/api/people")
+def people(user: User = Depends(current_user)):
+    return {"people": db.list_tracked_people(user.id)}
+
+
+@app.post("/api/people")
+def track_person(req: TrackPersonRequest, user: User = Depends(current_user)):
+    name = (req.name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Enter a person's name.")
+    db.ensure_profile(user.id, user.email)
+    return {"person": db.add_tracked_person(user.id, name)}
+
+
+@app.delete("/api/people")
+def untrack_person(person_id: int = Query(...), user: User = Depends(current_user)):
+    db.remove_tracked_person(user.id, person_id)
+    return {"ok": True}
+
+
 # ── In-app reader (inbox) ──────────────────────────────────────────────────────
 
 @app.get("/api/deliveries")
@@ -262,18 +303,23 @@ def deliveries(user: User = Depends(current_user)):
 
 @app.post("/api/scan")
 def scan(x_scan_secret: str = Header(default="")):
-    """Check every subscribed podcast for new episodes, summarize, and deliver.
+    """Check subscribed shows + a rotating batch of popular shows for new episodes,
+    summarize, and deliver — by subscription AND by tracked-person match.
     Protected by a shared secret so only the scheduler can trigger it."""
     _require_scan_secret(x_scan_secret)
     started = datetime.utcnow()
     stats = {"shows": 0, "ingested": 0, "matched": 0, "summarized": 0, "emails": 0}
     errors: list[str] = []
-    for podcast in db.distinct_subscribed_podcasts():
+    tp_index = db.tracked_people_index()   # normalized name -> [(user_id, tracked_since)]
+    contacts: dict[str, dict] = {}         # user_id -> {email, cadence}
+    targets = db.scan_targets(popular_batch=POPULAR_SCAN_BATCH)
+    for podcast in targets:
         stats["shows"] += 1
         try:
-            _scan_podcast(podcast, stats, errors)
+            _scan_podcast(podcast, tp_index, contacts, stats, errors)
         except Exception as e:
             errors.append(f"podcast {podcast['id']} ({podcast.get('title','?')}): {e}")
+    db.mark_scanned([p["id"] for p in targets])
     run_id = db.record_scan_run(
         started, stats["shows"], stats["ingested"], stats["matched"],
         stats["summarized"], stats["emails"], errors,
@@ -281,67 +327,125 @@ def scan(x_scan_secret: str = Header(default="")):
     return {"run_id": run_id, **stats, "errors": errors}
 
 
-def _scan_podcast(podcast: dict, stats: dict, errors: list) -> None:
+def _scan_podcast(podcast: dict, tp_index: dict, contacts: dict, stats: dict, errors: list) -> None:
     episodes = catalog.episodes_from_rss(podcast["rss_url"], max_results=RSS_SCAN_WINDOW)
     subs = db.subscribers_for_podcast(podcast["id"])
-    if not subs:
-        return
 
     for ep in episodes:
         pub = db.parse_dt(ep.get("published_at"))
         if not pub:
             continue
-        # Only deliver episodes published after a user subscribed (no back-catalog blast).
-        eligible = [s for s in subs if s.get("created_at") and s["created_at"] < pub]
-        if not eligible:
+        # Cost guard: each episode is processed exactly once, the first time we see
+        # it. (Episodes predate a just-added subscription/track, so the watermark
+        # below means no back-catalog blast either.)
+        if db.get_episode(podcast["id"], ep["guid"]):
             continue
 
+        user_reasons: dict[str, list] = {}   # user_id -> [reason, ...]
+
+        # 1. Subscription matches.
+        for s in subs:
+            if s.get("created_at") and s["created_at"] < pub:
+                uid = str(s["user_id"])
+                user_reasons.setdefault(uid, []).append({"type": "show", "podcast_id": podcast["id"]})
+                contacts[uid] = {"email": s["email"], "cadence": s["cadence"]}
+
+        # 2. Tracked-person matches (cheap metadata extraction, only if anyone tracks anyone).
+        people_rows = []
+        if tp_index:
+            ext = extract.extract_people_and_topics(
+                podcast["title"], ep["title"], ep.get("description", ""), ep.get("persons"),
+            )
+            for name in ext["people"]:
+                pid = db.upsert_person(name)
+                people_rows.append({"person_id": pid, "confidence": 0.9, "source": "llm"})
+                for uid, since in tp_index.get(db._normalize_name(name), []):
+                    if since and since < pub:
+                        user_reasons.setdefault(uid, []).append({"type": "person", "name": name})
+                        if uid not in contacts:
+                            c = db.profile_contact(uid)
+                            if c:
+                                contacts[uid] = {"email": c["email"], "cadence": c["cadence"]}
+
+        # Always ingest so we don't re-extract this episode next tick.
         episode_id = db.upsert_episode(
-            podcast["id"], ep["guid"], title=ep["title"], description=ep["description"],
-            audio_url=ep["audio_url"], episode_url=ep["episode_url"],
+            podcast["id"], ep["guid"], title=ep["title"], description=ep.get("description", ""),
+            audio_url=ep.get("audio_url", ""), episode_url=ep.get("episode_url", ""),
             published_at=pub, duration_seconds=ep.get("duration_seconds"),
         )
         stats["ingested"] += 1
+        if people_rows:
+            db.set_episode_people(episode_id, people_rows)
 
-        # Summarize once per episode (shared cache across all users).
-        cached = db.get_episode_summary(episode_id)
-        if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
-            summary_md = cached["summary_md"]
-        else:
-            text, source = get_transcript(
-                podcast["title"], ep["title"], ep["description"],
-                ep["audio_url"], ep["episode_url"],
-                transcript_url=ep.get("transcript_url", ""),
-                transcript_type=ep.get("transcript_type", ""),
-            )
-            if not text:
-                errors.append(f"no transcript: {podcast.get('title','?')} — {ep.get('title','?')}")
-                continue
-            summary_md = strip_summary_marker(summarize(
-                podcast["title"], ep["title"], text,
-                transcript_source=source, episode_duration=ep.get("duration_seconds"),
-            ))
-            db.save_episode_summary(
-                episode_id, summary_md=summary_md, transcript_source=source,
-                model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION,
-            )
-            stats["summarized"] += 1
+        if not user_reasons:
+            continue  # seen + indexed, but nobody is waiting on it
 
-        for s in eligible:
-            did = db.create_delivery(
-                s["user_id"], episode_id,
-                [{"type": "show", "podcast_id": podcast["id"]}], status="queued",
-            )
+        summary_md = _ensure_summary(podcast, ep, episode_id, stats, errors)
+        if summary_md is None:
+            continue
+
+        for uid, reasons in user_reasons.items():
+            did = db.create_delivery(uid, episode_id, reasons, status="queued")
             if did is None:
                 continue  # already delivered to this user
             stats["matched"] += 1
-            if s["cadence"] == "instant":
+            meta = contacts.get(uid) or {}
+            if meta.get("cadence") == "instant":
                 try:
-                    send_summary_email(s["email"], podcast["title"], ep["title"], summary_md)
+                    send_summary_email(meta["email"], podcast["title"], ep["title"], summary_md)
                     stats["emails"] += 1
                 except Exception as e:
-                    errors.append(f"email {s['email']}: {e}")
+                    errors.append(f"email {meta.get('email')}: {e}")
                 db.mark_delivery_sent(did)
+
+
+def _ensure_summary(podcast: dict, ep: dict, episode_id: int, stats: dict, errors: list) -> str | None:
+    """Return the episode's summary, generating + caching it once if needed."""
+    cached = db.get_episode_summary(episode_id)
+    if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
+        return cached["summary_md"]
+    text, source = get_transcript(
+        podcast["title"], ep["title"], ep.get("description", ""),
+        ep.get("audio_url", ""), ep.get("episode_url", ""),
+        transcript_url=ep.get("transcript_url", ""), transcript_type=ep.get("transcript_type", ""),
+    )
+    if not text:
+        errors.append(f"no transcript: {podcast.get('title','?')} — {ep.get('title','?')}")
+        return None
+    summary_md = strip_summary_marker(summarize(
+        podcast["title"], ep["title"], text,
+        transcript_source=source, episode_duration=ep.get("duration_seconds"),
+    ))
+    db.save_episode_summary(
+        episode_id, summary_md=summary_md, transcript_source=source,
+        model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION,
+    )
+    stats["summarized"] += 1
+    return summary_md
+
+
+@app.post("/api/admin/seed-popular")
+def seed_popular(x_scan_secret: str = Header(default="")):
+    """One-off (idempotent): resolve the curated popular show names to feeds and
+    flag them is_popular so the scan monitors them for tracked-person matches."""
+    _require_scan_secret(x_scan_secret)
+    seeded, errors = [], []
+    for name in POPULAR_SHOW_NAMES:
+        try:
+            res = catalog.search_podcasts(name, max_results=1)
+            if not res:
+                errors.append(f"no result: {name}")
+                continue
+            p = res[0]
+            pid = db.upsert_podcast(
+                p["rss_url"], title=p["title"], publisher=p["publisher"],
+                artwork_url=p["artwork"], categories=p.get("categories"),
+            )
+            db.set_popular(pid, True)
+            seeded.append(p["title"])
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+    return {"seeded": len(seeded), "titles": seeded, "errors": errors}
 
 
 @app.post("/api/digest")

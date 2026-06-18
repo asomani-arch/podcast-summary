@@ -7,6 +7,7 @@ const state = {
   currentPodcast: null,
   episodes: [],
   subscriptions: [],
+  people: [],
   deliveries: [],
   trayOpen: false,
   loadingTimer: null,
@@ -415,6 +416,7 @@ function toggleSubsTray() {
     backdrop.classList.remove('hidden');
     loadSubscriptions();
     loadStatus();
+    loadPeople();
   } else {
     tray.classList.remove('open');
     backdrop.classList.add('hidden');
@@ -520,6 +522,7 @@ function renderInbox() {
       <div class="inbox-body">
         <p class="inbox-ep">${esc(d.episode_title)}</p>
         <p class="inbox-meta">${esc(meta)}</p>
+        ${reasonBadges(d.reasons)}
       </div>`;
     el.addEventListener('click', () => openDeliverySummary(i));
     list.appendChild(el);
@@ -554,6 +557,68 @@ function renderStatus(el, run) {
   el.innerHTML = errs.length
     ? `<span class="status-error">Last check ${esc(when)} — ${errs.length} issue${errs.length === 1 ? '' : 's'}</span>`
     : `Last check ${esc(when)} · ${run.episodes_matched || 0} new delivered`;
+}
+
+/* ── PEOPLE TRACKING ───────────────────────────────────── */
+async function loadPeople() {
+  try {
+    const data = await api('/api/people');
+    state.people = data.people || [];
+    renderPeople();
+  } catch (_) {}
+}
+
+function renderPeople() {
+  const list = document.getElementById('peopleList');
+  if (!list) return;
+  if (!state.people.length) {
+    list.innerHTML = '<p class="no-subs">No one yet. Add a person above.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  state.people.forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'person-item';
+    el.innerHTML = `<span class="person-name">${esc(p.name)}</span>
+      <button class="person-remove" onclick="removePerson(${p.person_id})">Remove</button>`;
+    list.appendChild(el);
+  });
+}
+
+async function addPerson(event) {
+  event.preventDefault();
+  const input = document.getElementById('personInput');
+  const name = input.value.trim();
+  if (name.length < 2) return false;
+  try {
+    await api('/api/people', 'POST', { name });
+    input.value = '';
+    await loadPeople();
+    showToast(`Now following ${name}`, 'success');
+  } catch (e) {
+    showToast('Failed to add: ' + e.message, 'error');
+  }
+  return false;
+}
+
+async function removePerson(personId) {
+  try {
+    await api(`/api/people?person_id=${personId}`, 'DELETE');
+    await loadPeople();
+  } catch (e) {
+    showToast('Failed to remove: ' + e.message, 'error');
+  }
+}
+
+function reasonBadges(reasons) {
+  if (!Array.isArray(reasons)) return '';
+  const badges = reasons.map(r => {
+    if (r.type === 'person') return `👤 ${esc(r.name || 'tracked person')}`;
+    if (r.type === 'topic') return `🏷️ ${esc(r.topic || 'tracked topic')}`;
+    return null;
+  }).filter(Boolean);
+  if (!badges.length) return '';
+  return `<div class="inbox-reasons">${badges.map(b => `<span class="reason-badge">${b}</span>`).join('')}</div>`;
 }
 
 /* ── API HELPER ────────────────────────────────────────── */
