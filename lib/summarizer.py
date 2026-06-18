@@ -199,8 +199,8 @@ def _build_prompt(
         f"Source material:\n{source_text[:MAX_SOURCE_CHARS]}"
     )
 
-    # Allow comfortable room for the target word count plus markdown structure.
-    max_tokens = int(target_words * 2) + 500
+    # Allow generous room for the target word count plus markdown structure.
+    max_tokens = int(target_words * 2.5) + 1200
     return prompt, max_tokens
 
 
@@ -226,6 +226,13 @@ def summarize(
     response = client().models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt,
-        config={"max_output_tokens": max_tokens, "temperature": 0.35},
+        config={
+            "max_output_tokens": max_tokens,
+            "temperature": 0.35,
+            # Gemini 2.5 Flash "thinks" by default, and those hidden tokens eat the
+            # output budget — which truncated summaries to a stub. Turn it off so the
+            # full budget goes to the actual brief.
+            "thinking_config": {"thinking_budget": 0},
+        },
     )
     return _mark_summary(response.text or "")
