@@ -79,14 +79,14 @@ the **Subject** and the **Message body** (switch the body editor to HTML / "Sour
 and paste the blocks below). The `{{ .ConfirmationURL }}` token is filled in by
 Supabase automatically — leave it as-is.
 
-> **Interim (no domain needed):** the **Subject** and **Message body** below can be
-> applied right now — template editing works on Supabase's *default* email service,
-> so the emails become on-brand immediately and still deliver to anyone. The **one**
-> thing that can't change without a verified sending domain (Parts A + B) is the
-> **sender name** — it stays "Supabase Auth" until custom SMTP is configured.
-> Supabase's default email has no editable sender-name field. (Don't switch to
-> Resend's `onboarding@resend.dev` just for the name — that address only delivers to
-> your own Resend account email, so your test users would stop receiving links.)
+> **Prerequisite:** Supabase now **gates ALL auth-email customization behind custom
+> SMTP.** The dashboard shows "Set up custom SMTP to edit templates", and the default
+> email service ignores custom subjects/bodies. So Parts A + B below are **required
+> first** — you cannot brand the subject, body, *or* sender until a verified sending
+> domain + custom SMTP are configured. There is no no-domain branding path.
+> (Don't use Resend's `onboarding@resend.dev` as the SMTP sender to dodge this — it
+> only delivers to your own Resend account email, so your test users would stop
+> receiving links entirely.)
 
 ### First, set the link lifetime so the copy is accurate
 
