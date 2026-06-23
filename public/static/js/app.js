@@ -884,8 +884,6 @@ function toggleSubsTray() {
     backdrop.classList.remove('hidden');
     loadSubscriptions();
     loadStatus();
-    loadPeople();
-    loadTopics();
   } else {
     tray.classList.remove('open');
     backdrop.classList.add('hidden');
@@ -1011,13 +1009,28 @@ function openDeliverySummary(i) {
   showSummaryInPanel(d.summary_md || '_Summary not available yet._', d.transcript_source);
 }
 
-/* ── DISCOVER (recommendations) ────────────────────────── */
+/* ── FOR YOU (discovery hub: follow people/topics + recommendations) ── */
 async function showDiscover() {
   document.getElementById('searchResults').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
   document.getElementById('emptyState').classList.add('hidden');
   document.getElementById('inboxView').classList.add('hidden');
   document.getElementById('discoverView').classList.remove('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  // The follow controls live here now. Load them first so the recommendations'
+  // empty-state copy knows whether the user already follows anything.
+  document.getElementById('discoverList').innerHTML = skeletons(4);
+  await Promise.all([loadPeople(), loadTopics()]);
+  loadRecommendations();
+}
+
+// From the Subscriptions tray pointer: close the tray, open For You.
+function openDiscoverFromTray() {
+  if (state.trayOpen) toggleSubsTray();
+  showDiscover();
+}
+
+async function loadRecommendations() {
   document.getElementById('discoverList').innerHTML = skeletons(4);
   try {
     const data = await api('/api/recommendations');
@@ -1028,11 +1041,18 @@ async function showDiscover() {
   }
 }
 
+// Refresh the recommendation list if For You is the visible view (after a follow/unfollow).
+function refreshDiscoverRecs() {
+  if (!document.getElementById('discoverView').classList.contains('hidden')) loadRecommendations();
+}
+
 function renderDiscover() {
   const list = document.getElementById('discoverList');
   list.innerHTML = '';
   if (!state.recommendations.length) {
-    list.innerHTML = '<p class="no-results">No recommendations yet. Follow some people or topics, then check back as new episodes are scanned.</p>';
+    list.innerHTML = (state.people.length || state.topics.length)
+      ? '<p class="no-results">Nothing yet — we\'ll add episodes here as new shows are scanned for the guests and topics you follow.</p>'
+      : '<p class="no-results">Follow a guest or topic above and episodes featuring them will appear here.</p>';
     return;
   }
   state.recommendations.forEach((r, i) => {
@@ -1122,15 +1142,15 @@ function renderPeople() {
   const list = document.getElementById('peopleList');
   if (!list) return;
   if (!state.people.length) {
-    list.innerHTML = '<p class="no-subs">No one yet. Add a person above.</p>';
+    list.innerHTML = '<span class="chip-empty">No guests yet — add one above.</span>';
     return;
   }
   list.innerHTML = '';
   state.people.forEach(p => {
-    const el = document.createElement('div');
-    el.className = 'person-item';
-    el.innerHTML = `<span class="person-name">${esc(p.name)}</span>
-      <button class="person-remove" onclick="removePerson(${p.person_id})">Remove</button>`;
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.innerHTML = `${esc(p.name)}
+      <button class="chip-x" aria-label="Stop following ${esc(p.name)}" onclick="removePerson(${p.person_id})">×</button>`;
     list.appendChild(el);
   });
 }
@@ -1144,6 +1164,7 @@ async function addPerson(event) {
     const res = await api('/api/people', 'POST', { name });
     input.value = '';
     await loadPeople();
+    refreshDiscoverRecs();
     const n = (res && res.recent_matches) || 0;
     showToast(
       n > 0
@@ -1161,6 +1182,7 @@ async function removePerson(personId) {
   try {
     await api(`/api/people?person_id=${personId}`, 'DELETE');
     await loadPeople();
+    refreshDiscoverRecs();
   } catch (e) {
     showToast('Failed to remove: ' + e.message, 'error');
   }
@@ -1179,15 +1201,15 @@ function renderTopics() {
   const list = document.getElementById('topicsList');
   if (!list) return;
   if (!state.topics.length) {
-    list.innerHTML = '<p class="no-subs">No topics yet. Add one above.</p>';
+    list.innerHTML = '<span class="chip-empty">No topics yet — add one above.</span>';
     return;
   }
   list.innerHTML = '';
   state.topics.forEach(t => {
-    const el = document.createElement('div');
-    el.className = 'person-item';
-    el.innerHTML = `<span class="person-name">${esc(t.topic)}</span>
-      <button class="person-remove" onclick="removeTopic(${t.id})">Remove</button>`;
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.innerHTML = `${esc(t.topic)}
+      <button class="chip-x" aria-label="Stop following ${esc(t.topic)}" onclick="removeTopic(${t.id})">×</button>`;
     list.appendChild(el);
   });
 }
@@ -1201,6 +1223,7 @@ async function addTopic(event) {
     const res = await api('/api/topics', 'POST', { topic });
     input.value = '';
     await loadTopics();
+    refreshDiscoverRecs();
     const n = (res && res.recent_matches) || 0;
     showToast(
       n > 0
@@ -1218,6 +1241,7 @@ async function removeTopic(topicId) {
   try {
     await api(`/api/topics?topic_id=${topicId}`, 'DELETE');
     await loadTopics();
+    refreshDiscoverRecs();
   } catch (e) {
     showToast('Failed to remove: ' + e.message, 'error');
   }

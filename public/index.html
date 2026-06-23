@@ -207,6 +207,15 @@
   <main class="main hidden" id="appMain">
 
     <div class="empty-state" id="emptyState">
+      <!-- Front-and-center entry into the discovery hub (For You). -->
+      <button class="discover-banner" onclick="showDiscover()">
+        <div class="discover-banner-text">
+          <p class="discover-banner-title">Follow people &amp; topics you care about</p>
+          <p class="discover-banner-sub">Get a summary whenever your favourite guests or subjects show up — on any podcast we watch, not just the ones you subscribe to.</p>
+        </div>
+        <span class="discover-banner-cta">Set up For You →</span>
+      </button>
+
       <!-- Sample summary teaser — shows a new user what they'll get before they do anything. -->
       <div class="home-sample hidden" id="homeSample"></div>
 
@@ -273,7 +282,29 @@
 
     <div class="inbox-view hidden" id="discoverView">
       <p class="section-label">For You</p>
-      <p class="tray-section-hint">Episodes featuring people and topics you follow.</p>
+      <p class="discover-intro">Follow the people and topics you care about. We'll summarize new episodes
+         that feature them — across every show we watch — and gather them right here.</p>
+
+      <div class="follow-grid">
+        <div class="follow-card">
+          <p class="follow-card-title">👤 Guests you follow</p>
+          <form class="follow-add" onsubmit="return addPerson(event)">
+            <input type="text" id="personInput" placeholder="Add a guest — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
+            <button type="submit">Add</button>
+          </form>
+          <div class="chip-list" id="peopleList"></div>
+        </div>
+        <div class="follow-card">
+          <p class="follow-card-title">🏷️ Topics you follow</p>
+          <form class="follow-add" onsubmit="return addTopic(event)">
+            <input type="text" id="topicInput" placeholder="Add a topic — e.g. AI infrastructure" autocomplete="off" spellcheck="false" />
+            <button type="submit">Add</button>
+          </form>
+          <div class="chip-list" id="topicsList"></div>
+        </div>
+      </div>
+
+      <p class="section-label discover-recs-label">Episodes for you</p>
       <div class="inbox-list" id="discoverList"></div>
     </div>
 
@@ -340,21 +371,9 @@
     <p class="tray-section-hint">New episodes of these shows are summarized and delivered automatically.</p>
     <div class="subs-list" id="subsList"></div>
 
-    <div class="tray-section-label">Guests you follow</div>
-    <p class="tray-section-hint">Get a summary whenever they appear on a show you follow or a popular podcast.</p>
-    <form class="people-add" onsubmit="return addPerson(event)">
-      <input type="text" id="personInput" placeholder="Add a guest — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
-      <button type="submit">Add</button>
-    </form>
-    <div class="people-list" id="peopleList"></div>
-
-    <div class="tray-section-label">Topics you follow</div>
-    <p class="tray-section-hint">Get a summary when an episode substantially covers a topic.</p>
-    <form class="people-add" onsubmit="return addTopic(event)">
-      <input type="text" id="topicInput" placeholder="Add a topic — e.g. AI infrastructure" autocomplete="off" spellcheck="false" />
-      <button type="submit">Add</button>
-    </form>
-    <div class="people-list" id="topicsList"></div>
+    <p class="tray-section-hint" style="margin-top:18px">Want summaries of specific guests or topics across
+       <em>any</em> show? Follow them in
+       <button class="btn-link inline-link" onclick="openDiscoverFromTray()">For You</button>.</p>
   </div>
 
   <!-- Settings Panel -->

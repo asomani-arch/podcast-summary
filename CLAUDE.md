@@ -105,6 +105,13 @@ migration this round** — everything runs on the existing v5 schema.
   Subscriptions tray into a dedicated **Settings** panel (profile menu), which also
   has **data export** (`GET /api/me/export`) and **account deletion** (`DELETE /api/me`,
   uses `SUPABASE_SERVICE_ROLE_KEY` admin API → FK cascade).
+- **Discovery hub (follow-up).** Following guests/topics was buried in the
+  Subscriptions tray where non-technical users never found it — and "For You" told
+  them to follow people with no way to do so there. Moved the follow controls onto
+  the **For You** page itself (now the discovery hub: add guest/topic as removable
+  **chips** right above the recommendations they power), added a front-and-center
+  **discovery banner** on the home empty state, and left a pointer to For You in the
+  Subscriptions tray. The tray is now purely shows; For You owns people/topics.
 - **Polish / a11y.** Esc closes dropdowns/panel/trays; **resend-link** affordance on
   the sign-in screen; higher-contrast empty/placeholder copy; episode titles clamp to
   two lines; "Recommended for you" → "For You".
