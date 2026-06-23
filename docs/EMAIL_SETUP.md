@@ -79,6 +79,15 @@ the **Subject** and the **Message body** (switch the body editor to HTML / "Sour
 and paste the blocks below). The `{{ .ConfirmationURL }}` token is filled in by
 Supabase automatically — leave it as-is.
 
+> **Interim (no domain needed):** the **Subject** and **Message body** below can be
+> applied right now — template editing works on Supabase's *default* email service,
+> so the emails become on-brand immediately and still deliver to anyone. The **one**
+> thing that can't change without a verified sending domain (Parts A + B) is the
+> **sender name** — it stays "Supabase Auth" until custom SMTP is configured.
+> Supabase's default email has no editable sender-name field. (Don't switch to
+> Resend's `onboarding@resend.dev` just for the name — that address only delivers to
+> your own Resend account email, so your test users would stop receiving links.)
+
 ### First, set the link lifetime so the copy is accurate
 
 In **Authentication → Emails** (or **Providers → Email**), find **Email OTP
@@ -90,26 +99,28 @@ Expiration** and set it to **3600** seconds (1 hour). The templates below say
 **Subject:**
 
 ```
-Confirm your email to finish joining PodcastAI
+Confirm your email to start using PodcastAI 🎙️
 ```
 
 **Message body:**
 
 ```html
-<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;color:#222;line-height:1.55;">
-  <h2 style="color:#1a1a2e;margin:0 0 12px;">Welcome to PodcastAI 🎙️</h2>
-  <p>Thank you for joining the PodcastAI community to receive summaries of your
-     favorite podcasts. Please confirm your email address to finish signing up.</p>
-  <p style="margin:24px 0;">
-    <a href="{{ .ConfirmationURL }}"
-       style="background:#f59e0b;color:#000;text-decoration:none;font-weight:700;
-              padding:12px 22px;border-radius:8px;display:inline-block;">
-      Confirm your email address
-    </a>
-  </p>
-  <p style="color:#666;font-size:13px;">This link expires in 1 hour and can only be
-     used once. If you didn’t sign up for PodcastAI, you can safely ignore this email.</p>
-  <p style="color:#999;font-size:12px;margin-top:24px;">© 2026 Ashutosh Somani · We never sell your data or send spam.</p>
+<div style="margin:0;padding:24px 12px;background:#f4f4f5;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #ececec;border-radius:14px;overflow:hidden;">
+    <div style="height:4px;background:#f59e0b;"></div>
+    <div style="padding:28px 32px;">
+      <div style="font-size:20px;font-weight:700;letter-spacing:-0.02em;color:#111111;margin-bottom:22px;">🎙️ Podcast<span style="color:#f59e0b;">AI</span></div>
+      <h1 style="font-size:22px;line-height:1.3;color:#111111;margin:0 0 12px;">Welcome to PodcastAI</h1>
+      <p style="font-size:15px;line-height:1.6;color:#3f3f46;margin:0;">Thank you for joining the PodcastAI community to receive summaries of your favorite podcasts. Confirm your email address to finish signing up.</p>
+      <p style="margin:26px 0;">
+        <a href="{{ .ConfirmationURL }}" style="background:#f59e0b;color:#111111;text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:8px;display:inline-block;">Confirm your email address</a>
+      </p>
+      <p style="font-size:13px;line-height:1.6;color:#6b7280;margin:0;">This link expires in 1 hour and can only be used once. If you didn’t sign up for PodcastAI, you can safely ignore this email.</p>
+    </div>
+    <div style="padding:16px 32px;border-top:1px solid #eeeeee;background:#fafafa;">
+      <p style="font-size:12px;line-height:1.5;color:#9ca3af;margin:0;">© 2026 Ashutosh Somani · We never sell your data or send spam.</p>
+    </div>
+  </div>
 </div>
 ```
 
@@ -118,25 +129,28 @@ Confirm your email to finish joining PodcastAI
 **Subject:**
 
 ```
-Your PodcastAI sign-in link
+Your PodcastAI sign-in link 🎙️
 ```
 
 **Message body:**
 
 ```html
-<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;color:#222;line-height:1.55;">
-  <h2 style="color:#1a1a2e;margin:0 0 12px;">Welcome back to PodcastAI 🎙️</h2>
-  <p>Your podcast summaries await. Click the button below to sign in — no password needed.</p>
-  <p style="margin:24px 0;">
-    <a href="{{ .ConfirmationURL }}"
-       style="background:#f59e0b;color:#000;text-decoration:none;font-weight:700;
-              padding:12px 22px;border-radius:8px;display:inline-block;">
-      Sign in to PodcastAI
-    </a>
-  </p>
-  <p style="color:#666;font-size:13px;">This link expires in 1 hour and can only be
-     used once. If you didn’t request it, you can safely ignore this email.</p>
-  <p style="color:#999;font-size:12px;margin-top:24px;">© 2026 Ashutosh Somani · We never sell your data or send spam.</p>
+<div style="margin:0;padding:24px 12px;background:#f4f4f5;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #ececec;border-radius:14px;overflow:hidden;">
+    <div style="height:4px;background:#f59e0b;"></div>
+    <div style="padding:28px 32px;">
+      <div style="font-size:20px;font-weight:700;letter-spacing:-0.02em;color:#111111;margin-bottom:22px;">🎙️ Podcast<span style="color:#f59e0b;">AI</span></div>
+      <h1 style="font-size:22px;line-height:1.3;color:#111111;margin:0 0 12px;">Welcome back to PodcastAI</h1>
+      <p style="font-size:15px;line-height:1.6;color:#3f3f46;margin:0;">Your podcast summaries await. Click the button below to sign in — no password needed.</p>
+      <p style="margin:26px 0;">
+        <a href="{{ .ConfirmationURL }}" style="background:#f59e0b;color:#111111;text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:8px;display:inline-block;">Sign in to PodcastAI</a>
+      </p>
+      <p style="font-size:13px;line-height:1.6;color:#6b7280;margin:0;">This link expires in 1 hour and can only be used once. If you didn’t request it, you can safely ignore this email.</p>
+    </div>
+    <div style="padding:16px 32px;border-top:1px solid #eeeeee;background:#fafafa;">
+      <p style="font-size:12px;line-height:1.5;color:#9ca3af;margin:0;">© 2026 Ashutosh Somani · We never sell your data or send spam.</p>
+    </div>
+  </div>
 </div>
 ```
 
