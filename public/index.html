@@ -10,12 +10,17 @@
   <link rel="stylesheet" href="/static/css/styles.css" />
   <style>
     /* v5 additions — use the existing dark-theme design tokens from styles.css. */
-    .auth-overlay { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center;
-      justify-content: center; background: var(--bg); padding: 24px; }
-    .auth-card { width: 100%; max-width: 380px; text-align: center; }
-    .auth-card .logo { justify-content: center; margin-bottom: 22px; }
+    .auth-overlay { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; background: var(--bg); padding: 24px; }
+    .auth-card { width: 100%; max-width: 400px; text-align: center; margin: auto 0; }
+    .auth-card .logo { justify-content: center; margin-bottom: 14px; }
+    .auth-tagline { color: var(--text-2); font-size: 1rem; line-height: 1.5; margin: 0 auto 30px;
+      max-width: 340px; }
     .auth-card h1 { font-family: var(--font-display); font-size: 1.9rem; margin: 0 0 8px; color: var(--text); }
-    .auth-card p.sub { color: var(--text-2); margin: 0 0 26px; font-size: .95rem; }
+    .auth-card p.sub { color: var(--text-2); margin: 0 0 26px; font-size: .95rem; line-height: 1.5; }
+    .auth-fineprint { color: var(--text-3); font-size: .78rem; line-height: 1.5; margin: 26px auto 0;
+      max-width: 340px; }
+    .auth-footer { color: var(--text-3); font-size: .78rem; padding-top: 24px; }
     .auth-form { display: flex; flex-direction: column; gap: 10px; }
     .auth-form input { padding: 13px 15px; border: 1px solid var(--border-bright); border-radius: var(--radius-sm);
       font-size: .95rem; font-family: inherit; background: var(--surface-2); color: var(--text); }
@@ -87,6 +92,38 @@
     .inbox-reasons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; }
     .reason-badge { font-size: .7rem; padding: 2px 8px; border-radius: 999px;
       background: var(--accent-dim); color: var(--accent); }
+    /* Profile menu (header upper-right) */
+    .profile-menu { position: relative; }
+    .profile-btn { width: 36px; height: 36px; border-radius: 999px; border: 1px solid var(--border-bright);
+      background: var(--surface-2); cursor: pointer; padding: 0; overflow: hidden; display: flex;
+      align-items: center; justify-content: center; transition: border-color .15s, background .15s; }
+    .profile-btn:hover { border-color: var(--accent); }
+    .profile-btn[aria-expanded="true"] { border-color: var(--accent); }
+    .profile-avatar { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .profile-initial { font-size: .9rem; font-weight: 700; color: var(--accent); text-transform: uppercase; }
+    .profile-dropdown { position: absolute; right: 0; top: calc(100% + 8px); min-width: 220px;
+      background: var(--surface); border: 1px solid var(--border-bright); border-radius: var(--radius-sm);
+      box-shadow: 0 10px 30px rgba(0,0,0,.5); padding: 6px; z-index: 60; }
+    .profile-email { font-size: .8rem; color: var(--text-2); padding: 8px 10px 10px; margin: 0;
+      border-bottom: 1px solid var(--border); word-break: break-all; }
+    .profile-item { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      width: 100%; text-align: left; background: none; border: none; color: var(--text);
+      font-family: inherit; font-size: .9rem; padding: 10px; border-radius: var(--radius-xs);
+      cursor: pointer; transition: background .12s; }
+    .profile-item:first-of-type { margin-top: 4px; }
+    .profile-item:hover { background: var(--surface-2); }
+    .profile-item.danger { color: var(--text-2); }
+    .profile-item.danger:hover { color: var(--danger); }
+    .profile-item .badge { line-height: 1.4; }
+    /* Share menu (summary panel) */
+    .share-menu { position: relative; }
+    .share-dropdown { position: absolute; right: 0; top: calc(100% + 6px); min-width: 150px;
+      background: var(--surface); border: 1px solid var(--border-bright); border-radius: var(--radius-sm);
+      box-shadow: 0 10px 30px rgba(0,0,0,.5); padding: 6px; z-index: 60; }
+    .share-item { display: block; width: 100%; text-align: left; background: none; border: none;
+      color: var(--text); font-family: inherit; font-size: .9rem; padding: 9px 10px;
+      border-radius: var(--radius-xs); cursor: pointer; transition: background .12s; }
+    .share-item:hover { background: var(--surface-2); }
   </style>
 </head>
 <body>
@@ -100,41 +137,52 @@
         </svg>
         <span class="logo-text">Podcast<span class="accent">AI</span></span>
       </div>
+      <p class="auth-tagline">Save time with AI summaries of your favorite podcast episodes — sent straight to your inbox.</p>
       <h1>Sign in</h1>
-      <p class="sub">We'll email you a magic link — no password needed.</p>
+      <p class="sub">Enter your email and we'll send you a secure sign-in link — no password needed.</p>
       <form class="auth-form" id="authForm" onsubmit="return sendMagicLink(event)">
         <input type="email" id="authEmail" placeholder="you@example.com" autocomplete="email" required />
-        <button type="submit" id="authBtn">Send magic link</button>
+        <button type="submit" id="authBtn">Send sign-in link</button>
       </form>
       <p class="auth-msg" id="authMsg"></p>
+      <p class="auth-fineprint">We'll only use your email to send podcast summaries and your sign-in link. We never sell your data or send spam, and you can unsubscribe anytime.</p>
     </div>
+    <footer class="auth-footer">© 2026 Ashutosh Somani</footer>
   </div>
 
   <header class="site-header hidden" id="appHeader">
     <div class="header-inner">
-      <div class="logo">
+      <a class="logo" href="#" onclick="goHome(event)" aria-label="PodcastAI — back to home">
         <svg class="logo-wave" viewBox="0 0 36 20" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M2 10 Q6 2 10 10 Q14 18 18 10 Q22 2 26 10 Q30 18 34 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         <span class="logo-text">Podcast<span class="accent">AI</span></span>
-      </div>
+      </a>
       <div class="account">
-        <span class="account-email" id="accountEmail"></span>
-        <button class="btn-subs" onclick="showDiscover()">Discover</button>
-        <button class="btn-subs" onclick="showInbox()">Inbox</button>
-        <button class="btn-subs" onclick="toggleSubsTray()">
-          Subscriptions
-          <span class="badge" id="subCount">0</span>
-        </button>
-        <button class="btn-link" onclick="signOut()">Sign out</button>
+        <button class="btn-subs" onclick="showDiscover()">For You</button>
+        <div class="profile-menu" id="profileMenu">
+          <button class="profile-btn" id="profileBtn" onclick="toggleProfileMenu(event)"
+                  aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
+            <img class="profile-avatar hidden" id="profileAvatar" alt="" />
+            <span class="profile-initial" id="profileInitial"></span>
+          </button>
+          <div class="profile-dropdown hidden" id="profileDropdown" role="menu">
+            <p class="profile-email" id="accountEmail"></p>
+            <button class="profile-item" role="menuitem" onclick="profileGo(showInbox)">My Summaries</button>
+            <button class="profile-item" role="menuitem" onclick="profileGo(toggleSubsTray)">
+              My Subscriptions <span class="badge" id="subCount">0</span>
+            </button>
+            <button class="profile-item danger" role="menuitem" onclick="signOut()">Sign Out</button>
+          </div>
+        </div>
       </div>
     </div>
   </header>
 
   <section class="hero hidden" id="appHero">
-    <p class="hero-label">AI-powered summaries</p>
-    <h1 class="hero-title">Search any podcast.<br>Get the insights instantly.</h1>
-    <p class="hero-sub">Business and tech, distilled from any episode.</p>
+    <p class="hero-label">AI-powered podcast summaries</p>
+    <h1 class="hero-title">Search any podcast.<br>Get insights instantly.</h1>
+    <p class="hero-sub">Quick summaries of the episodes you care most about.</p>
     <div class="search-wrap">
       <svg class="search-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
         <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.8"/>
@@ -144,7 +192,7 @@
         type="text"
         id="searchInput"
         class="search-input"
-        placeholder='Try "Lex Fridman", "a16z", "Masters of Scale"…'
+        placeholder='Try "Lex Fridman", "a16z", "AI agents", "Masters of Scale"…'
         autocomplete="off"
         spellcheck="false"
       />
@@ -227,7 +275,22 @@
         <h3 class="panel-ep-title" id="panelTitle"></h3>
       </div>
       <div class="panel-head-actions">
-        <button class="btn-icon" onclick="closePanel()">
+        <div class="share-menu" id="shareMenu">
+          <button class="btn-icon" id="shareBtn" onclick="toggleShareMenu(event)"
+                  aria-haspopup="true" aria-expanded="false" aria-label="Share summary" title="Share">
+            <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="4" cy="9" r="2" stroke="currentColor" stroke-width="1.6"/>
+              <circle cx="14" cy="4" r="2" stroke="currentColor" stroke-width="1.6"/>
+              <circle cx="14" cy="14" r="2" stroke="currentColor" stroke-width="1.6"/>
+              <path d="m6 8 6-3M6 10l6 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <div class="share-dropdown hidden" id="shareDropdown" role="menu">
+            <button class="share-item" role="menuitem" onclick="shareCopyLink()">Copy link</button>
+            <button class="share-item" role="menuitem" onclick="shareEmail()">Email</button>
+          </div>
+        </div>
+        <button class="btn-icon" onclick="closePanel()" aria-label="Close">
           <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M3 3l10 10M13 3 3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
           </svg>
@@ -257,12 +320,15 @@
       </select>
     </div>
     <div class="tray-status" id="trayStatus"></div>
+
+    <div class="tray-section-label">Podcasts you follow</div>
+    <p class="tray-section-hint">New episodes of these shows are summarized and delivered automatically.</p>
     <div class="subs-list" id="subsList"></div>
 
-    <div class="tray-section-label">People you follow</div>
+    <div class="tray-section-label">Guests you follow</div>
     <p class="tray-section-hint">Get a summary whenever they appear on a show you follow or a popular podcast.</p>
     <form class="people-add" onsubmit="return addPerson(event)">
-      <input type="text" id="personInput" placeholder="Add a person — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
+      <input type="text" id="personInput" placeholder="Add a guest — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
       <button type="submit">Add</button>
     </form>
     <div class="people-list" id="peopleList"></div>

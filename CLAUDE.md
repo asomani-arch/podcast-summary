@@ -32,9 +32,37 @@ The app was rebuilt as a multi-tenant product (Phases 0–5 of docs/PRD.md), all
 `RESEND_FROM`. (Legacy Neon `POSTGRES_URL*` vars are still present but unused.)
 
 **Known limitations:** email only delivers to the owner until a custom Resend domain is
-verified — everyone else reads summaries in the in-app **Inbox** (PRD §8). People/topic
-coverage = subscribed + curated popular shows (add a free Podcast Index key for true
-universe scan).
+verified — everyone else reads summaries in the in-app **My Summaries** view (PRD §8).
+People/topic coverage = subscribed + curated popular shows (add a free Podcast Index key
+for true universe scan).
+
+### Product feedback round 1 (2026-06-22)
+
+Test-user feedback incorporated this round (see git log). Highlights:
+- **Brand is "PodcastAI"** across UI + emails (decided, not generic).
+- **Sign-in screen** (the logged-out homepage = the auth overlay) now has a value-prop
+  tagline, privacy fine print, a © footer, and says "secure sign-in link" (not "magic
+  link") with a 1-hour expiry note.
+- **Header**: logo links home; the raw email is replaced by a profile-avatar dropdown
+  (Gravatar w/ initial fallback) → email · My Summaries · My Subscriptions · Sign Out.
+  Nav "Discover" → "For You"; "Inbox" → "My Summaries"; tray sections relabeled
+  Podcasts / Guests / Topics.
+- **Summaries**: ad/sponsor reads are now excluded from the brief (summarizer prompt +
+  `SUMMARY_STYLE_VERSION` bumped to `pe-layered-v6`, so cached summaries regenerate on
+  next view). Share control (Copy link / Email) added to the summary panel, backed by
+  `?ep=<episode_id>` deep-links.
+- **Email branding/deliverability**: digest + summary emails rebranded to PodcastAI with
+  privacy + © footer. Branded *auth* emails and real delivery to non-owners require a
+  verified sending domain — **dashboard/DNS steps are in [docs/EMAIL_SETUP.md](docs/EMAIL_SETUP.md)**
+  (Resend domain → Vercel `RESEND_FROM` → Supabase custom SMTP + email templates).
+- **Catalog coverage**: search already covers the whole iTunes catalog (any show, incl.
+  *A Slight Change of Plans*). The *curated* people/topic scan list (`POPULAR_SHOW_NAMES`)
+  was broadened beyond business/tech. **Re-run `POST /api/admin/seed-popular`** (with the
+  `X-Scan-Secret` header) after deploy so the new shows are monitored.
+
+**Deferred (scoped follow-up):** *Audio/verbal summaries* — TTS versions of each brief
+with a written/audio toggle. Needs a TTS provider (e.g. Gemini TTS / ElevenLabs), audio
+storage (Vercel Blob), a player UI, and per-generation cost handling. Not built this round.
 
 ---
 

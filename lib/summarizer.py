@@ -9,7 +9,7 @@ users (see docs/PRD.md §7).
 import os
 import re
 
-SUMMARY_STYLE_VERSION = "pe-layered-v5"
+SUMMARY_STYLE_VERSION = "pe-layered-v6"  # v6: exclude sponsor/ad reads from the brief
 SUMMARY_MARKER = f"<!-- summary_style:{SUMMARY_STYLE_VERSION} -->"
 
 _client = None
@@ -164,6 +164,15 @@ def _build_prompt(
         "10-second read, the body rewards a deeper read.\n\n"
         "Use the transcript as the single source of truth. Never fabricate or imply "
         "the episode said more than it did.\n\n"
+        "Ignore advertising entirely. Podcast transcripts interleave sponsor reads, "
+        "ad spots, and promotional segments with the actual conversation — these are "
+        "NOT part of the episode's content. Do not summarize them, and never let "
+        "advertiser names, promo codes, discount URLs, or sponsor figures appear in "
+        "the brief (especially not in Companies, Sectors & Numbers). A company belongs "
+        "in the brief only if it is genuinely discussed in the conversation, not merely "
+        "advertised. Telltale signs of an ad to skip: 'this episode is brought to you "
+        "by', 'use code', 'visit <site>.com/<show>', 'sign up today', recurring "
+        "host-read pitches for unrelated products.\n\n"
         f"{source_note_requirement}"
         f"{length_note}Write approximately {target_words} words total. Use "
         "GitHub-flavored markdown. Produce exactly these sections, in this order:\n\n"

@@ -13,6 +13,9 @@ const state = {
   recommendations: [],
   trayOpen: false,
   loadingTimer: null,
+  // Context for the currently-open summary panel, used by the Share control.
+  share: { episodeId: null, title: '', podcast: '', text: '' },
+  pendingDeepLink: null,   // episode_id from a ?ep= share link, opened after sign-in
 };
 
 const CADENCE_LABELS = { instant: 'Instant', daily: 'Daily digest', weekly: 'Weekly digest' };
@@ -26,6 +29,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('epSearch').addEventListener('input', e => {
     debouncedEpSearch(e.target.value.trim());
+  });
+  // A ?ep=<id> share link opens that summary once the user is signed in.
+  const epParam = new URLSearchParams(window.location.search).get('ep');
+  if (epParam && /^\d+$/.test(epParam)) state.pendingDeepLink = parseInt(epParam, 10);
+  // Close the profile / share dropdowns on any outside click.
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#profileMenu')) closeProfileMenu();
+    if (!e.target.closest('#shareMenu')) closeShareMenu();
   });
   initAuth();
 });
@@ -62,8 +73,61 @@ function showApp(user) {
   document.getElementById('authOverlay').classList.add('hidden');
   ['appHeader', 'appHero', 'appMain'].forEach(id => document.getElementById(id).classList.remove('hidden'));
   document.getElementById('accountEmail').textContent = user.email || '';
+  setProfileAvatar(user.email || '');
   loadProfile();
   loadSubscriptions();
+  if (state.pendingDeepLink) {
+    const epId = state.pendingDeepLink;
+    state.pendingDeepLink = null;
+    openSharedEpisode(epId);
+  }
+}
+
+/* ── PROFILE MENU + AVATAR ─────────────────────────────── */
+// Try the email's Gravatar (SHA-256 per Gravatar's current API); fall back to a
+// colored initial if the user has no Gravatar. No PII leaves the page beyond the
+// standard hashed-email Gravatar request.
+async function setProfileAvatar(email) {
+  const initialEl = document.getElementById('profileInitial');
+  const imgEl = document.getElementById('profileAvatar');
+  const letter = (email.trim()[0] || '?').toUpperCase();
+  if (initialEl) initialEl.textContent = letter;
+  if (!imgEl || !email || !window.crypto?.subtle) return;
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.trim().toLowerCase()));
+    const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    imgEl.onload = () => { imgEl.classList.remove('hidden'); if (initialEl) initialEl.classList.add('hidden'); };
+    imgEl.onerror = () => { imgEl.classList.add('hidden'); };
+    imgEl.src = `https://www.gravatar.com/avatar/${hash}?d=404&s=72`;
+  } catch (_) { /* keep the initial */ }
+}
+
+function toggleProfileMenu(event) {
+  if (event) event.stopPropagation();
+  const dd = document.getElementById('profileDropdown');
+  const open = dd.classList.toggle('hidden') === false;
+  document.getElementById('profileBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function closeProfileMenu() {
+  const dd = document.getElementById('profileDropdown');
+  if (dd && !dd.classList.contains('hidden')) {
+    dd.classList.add('hidden');
+    document.getElementById('profileBtn').setAttribute('aria-expanded', 'false');
+  }
+}
+// Run a menu action, then close the dropdown.
+function profileGo(fn) { closeProfileMenu(); fn(); }
+
+/* ── HOME ──────────────────────────────────────────────── */
+// Clicking the logo returns to the default search/home view.
+function goHome(event) {
+  if (event) event.preventDefault();
+  closeProfileMenu();
+  const input = document.getElementById('searchInput');
+  if (input) input.value = '';
+  state.searchResults = [];
+  clearResults();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function showLogin() {
@@ -84,13 +148,13 @@ async function sendMagicLink(event) {
       options: { emailRedirectTo: window.location.origin + window.location.pathname },
     });
     if (error) throw error;
-    msg.textContent = 'Check your email for the sign-in link.';
+    msg.textContent = 'Check your email for the sign-in link — it expires in 1 hour.';
     msg.className = 'auth-msg ok';
     btn.textContent = 'Link sent';
   } catch (e) {
     msg.textContent = e.message || 'Could not send the link.';
     msg.className = 'auth-msg error';
-    btn.disabled = false; btn.textContent = 'Send magic link';
+    btn.disabled = false; btn.textContent = 'Send sign-in link';
   }
   return false;
 }
@@ -290,6 +354,7 @@ async function openEpisodeSummary(index, btn) {
       episode_transcript_type: ep.transcript_type || '',
     });
     state.episodes[index] = { ...ep, has_summary: true, episode_id: data.episode_id };
+    state.share.episodeId = data.episode_id;
     const actionEl = document.getElementById(`ep-action-${index}`);
     if (actionEl) actionEl.innerHTML =
       `<button class="btn-view" onclick="openEpisodeSummary(${index}, this)">View Summary</button>`;
@@ -311,6 +376,8 @@ const LOADING_MSGS = [
 ];
 
 function openPanel(epTitle, podcastName, descriptionHtml) {
+  state.share = { episodeId: null, title: epTitle, podcast: podcastName, text: '' };
+  closeShareMenu();
   document.getElementById('panelTitle').textContent = epTitle;
   document.getElementById('panelPodcast').textContent = podcastName;
   const preview = descriptionHtml ? stripTags(descriptionHtml).slice(0, 480) : '';
@@ -336,10 +403,76 @@ function openPanel(epTitle, podcastName, descriptionHtml) {
 
 function showSummaryInPanel(summary, source) {
   clearInterval(state.loadingTimer);
+  state.share.text = summary || '';
   const html = window.marked ? marked.parse(summary || '') : (summary || '');
   document.getElementById('panelBody').innerHTML = `
     <div class="summary-content">${html}</div>
     <p class="source-tag">Transcript source: ${esc(sourceLabel(source))}</p>`;
+}
+
+/* ── SHARE ─────────────────────────────────────────────── */
+function toggleShareMenu(event) {
+  if (event) event.stopPropagation();
+  const dd = document.getElementById('shareDropdown');
+  const open = dd.classList.toggle('hidden') === false;
+  document.getElementById('shareBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function closeShareMenu() {
+  const dd = document.getElementById('shareDropdown');
+  if (dd && !dd.classList.contains('hidden')) {
+    dd.classList.add('hidden');
+    document.getElementById('shareBtn').setAttribute('aria-expanded', 'false');
+  }
+}
+
+// A shareable link only works once the episode has a cached summary (episodeId set).
+function shareLink() {
+  if (!state.share.episodeId) return null;
+  return `${window.location.origin}${window.location.pathname}?ep=${state.share.episodeId}`;
+}
+
+async function shareCopyLink() {
+  closeShareMenu();
+  const link = shareLink();
+  if (!link) { showToast('This summary isn’t ready to share yet — try reopening it.', 'error'); return; }
+  try {
+    await navigator.clipboard.writeText(link);
+    showToast('Link copied to clipboard', 'success');
+  } catch (_) {
+    window.prompt('Copy this link:', link);
+  }
+}
+
+function shareEmail() {
+  closeShareMenu();
+  const link = shareLink();
+  const subject = `Podcast summary: ${state.share.title}`;
+  const intro = `${state.share.title}${state.share.podcast ? ` — ${state.share.podcast}` : ''}`;
+  const bodyParts = [intro, ''];
+  if (link) bodyParts.push(`Read it on PodcastAI: ${link}`, '');
+  if (state.share.text) bodyParts.push('— — —', state.share.text);
+  bodyParts.push('', 'Summarized by PodcastAI');
+  const body = bodyParts.join('\n');
+  // mailto bodies are length-limited by clients; trim very long summaries.
+  const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body.slice(0, 1800))}`;
+  window.location.href = url;
+}
+
+// Open a summary from a ?ep= share link (uses the cached-summary endpoint).
+async function openSharedEpisode(episodeId) {
+  openPanel('Loading summary…', '');
+  try {
+    const data = await api(`/api/episodes/${episodeId}/summarize`, 'POST');
+    document.getElementById('panelTitle').textContent = data.episode_title || 'Summary';
+    document.getElementById('panelPodcast').textContent = data.podcast_title || '';
+    state.share.episodeId = episodeId;
+    state.share.title = data.episode_title || 'Summary';
+    state.share.podcast = data.podcast_title || '';
+    showSummaryInPanel(data.summary, data.source);
+  } catch (e) {
+    closePanel();
+    showToast(e.message || 'Could not open that summary.', 'error');
+  }
 }
 
 function closePanel() {
@@ -539,6 +672,7 @@ function renderInbox() {
 function openDeliverySummary(i) {
   const d = state.deliveries[i];
   openPanel(d.episode_title, d.podcast_title);
+  state.share.episodeId = d.episode_id;
   showSummaryInPanel(d.summary_md || '_Summary not available yet._', d.transcript_source);
 }
 
@@ -589,6 +723,7 @@ function renderDiscover() {
 async function openRecSummary(i) {
   const r = state.recommendations[i];
   openPanel(r.episode_title, r.podcast_title);
+  state.share.episodeId = r.episode_id;
   try {
     const data = await api(`/api/episodes/${r.episode_id}/summarize`, 'POST');
     showSummaryInPanel(data.summary, data.source);

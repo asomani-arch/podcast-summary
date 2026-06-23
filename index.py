@@ -42,6 +42,11 @@ POPULAR_SHOW_NAMES = [
     "The Diary Of A CEO", "The Twenty Minute VC", "Capital Allocators",
     "We Study Billionaires", "Business Breakdowns", "Decoder with Nilay Patel",
     "Hard Fork", "No Priors", "Stratechery",
+    # Broader interview / behavioral-science shows where notable guests also turn up,
+    # so people-tracking isn't limited to the business/tech canon.
+    "A Slight Change of Plans", "The Mel Robbins Podcast", "ReThinking with Adam Grant",
+    "Huberman Lab", "Armchair Expert with Dax Shepard", "Freakonomics Radio",
+    "On Purpose with Jay Shetty", "The Ezra Klein Show",
 ]
 
 
@@ -341,10 +346,12 @@ def summarize_existing(episode_id: int, user: User = Depends(current_user)):
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found.")
 
+    titles = {"episode_title": ep.get("title") or "", "podcast_title": ep.get("podcast_title") or ""}
+
     cached = db.get_episode_summary(episode_id)
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
         return {"episode_id": episode_id, "summary": cached["summary_md"],
-                "source": cached.get("transcript_source"), "cached": True}
+                "source": cached.get("transcript_source"), "cached": True, **titles}
 
     if db.count_user_summaries_today(user.id) >= MANUAL_SUMMARY_DAILY_CAP:
         raise HTTPException(
@@ -364,7 +371,7 @@ def summarize_existing(episode_id: int, user: User = Depends(current_user)):
     db.save_episode_summary(episode_id, summary_md=summary_md, transcript_source=source,
                             model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION)
     db.record_engagement(user.id, episode_id, "summarize")
-    return {"episode_id": episode_id, "summary": summary_md, "source": source, "cached": False}
+    return {"episode_id": episode_id, "summary": summary_md, "source": source, "cached": False, **titles}
 
 
 # ── Scan + delivery pipeline (called by the external scheduler) ─────────────────
