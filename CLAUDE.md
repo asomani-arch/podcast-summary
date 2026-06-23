@@ -64,6 +64,22 @@ Test-user feedback incorporated this round (see git log). Highlights:
 with a written/audio toggle. Needs a TTS provider (e.g. Gemini TTS / ElevenLabs), audio
 storage (Vercel Blob), a player UI, and per-generation cost handling. Not built this round.
 
+### Product feedback round 2 (2026-06-22) — titratable summary detail
+
+Users can now set a **summary detail level — Quick / Standard / Deep** — in the
+Subscriptions tray (saved preference, like cadence). It applies to summaries they open
+**and** to what's delivered to them (email/digest/inbox).
+- `summarizer.py`: `detail_level` drives length (×0.35 / ×1.0 / ×1.8 of the duration
+  baseline) and section depth — Quick = TL;DR + takeaways only; Deep = exhaustive. Standard
+  is byte-for-byte the old behavior.
+- Summaries are now cached **per (episode, detail_level)**; `profiles.summary_detail` holds
+  the preference. The scan generates one summary per distinct level among matched users
+  (one shared transcript fetch) and delivers each user their level.
+- **⚠️ Requires a DB migration** (in `db/schema_v5.sql`): adds `episode_summaries.detail_level`
+  + `profiles.summary_detail`, and swaps the `episode_summaries` unique key from `(episode_id)`
+  to `(episode_id, detail_level)`. The new code's `ON CONFLICT (episode_id, detail_level)`
+  needs this, so **run the migration before/with the deploy**, not after.
+
 ---
 
 ## Live deployment

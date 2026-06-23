@@ -17,6 +17,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 VALID_CADENCES = {"instant", "daily", "weekly"}
+VALID_DETAIL_LEVELS = {"quick", "standard", "deep"}
+DEFAULT_DETAIL_LEVEL = "standard"
 
 
 def get_conn():
@@ -166,9 +168,12 @@ def summarized_episode_ids(podcast_id: int, guids: list[str]) -> dict[str, int]:
 
 # ── Global summary cache ───────────────────────────────────────────────────────
 
-def get_episode_summary(episode_id: int) -> dict | None:
+def get_episode_summary(episode_id: int, detail_level: str = DEFAULT_DETAIL_LEVEL) -> dict | None:
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM episode_summaries WHERE episode_id = %s", (episode_id,))
+        cur.execute(
+            "SELECT * FROM episode_summaries WHERE episode_id = %s AND detail_level = %s",
+            (episode_id, detail_level),
+        )
         return cur.fetchone()
 
 
@@ -180,15 +185,16 @@ def save_episode_summary(
     transcript_source: str = "",
     model: str = "",
     style_version: str = "",
+    detail_level: str = DEFAULT_DETAIL_LEVEL,
 ) -> int:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO episode_summaries
                 (episode_id, summary_md, tldr, target_words,
-                 transcript_source, model, style_version)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (episode_id) DO UPDATE SET
+                 transcript_source, model, style_version, detail_level)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (episode_id, detail_level) DO UPDATE SET
                 summary_md        = EXCLUDED.summary_md,
                 tldr              = EXCLUDED.tldr,
                 target_words      = EXCLUDED.target_words,
@@ -199,7 +205,7 @@ def save_episode_summary(
             RETURNING id
             """,
             (episode_id, summary_md, tldr, target_words,
-             transcript_source, model, style_version),
+             transcript_source, model, style_version, detail_level),
         )
         return cur.fetchone()["id"]
 
@@ -227,13 +233,31 @@ def get_profile(user_id: str) -> dict | None:
         return cur.fetchone()
 
 
-def update_profile(user_id: str, default_cadence: str) -> dict | None:
-    if default_cadence not in VALID_CADENCES:
-        raise ValueError(f"default_cadence must be one of {sorted(VALID_CADENCES)}")
+def update_profile(
+    user_id: str,
+    default_cadence: str | None = None,
+    summary_detail: str | None = None,
+) -> dict | None:
+    """Update whichever preference(s) are provided. Both are optional so the
+    PATCH endpoint can change cadence and summary-detail independently."""
+    sets, params = [], []
+    if default_cadence is not None:
+        if default_cadence not in VALID_CADENCES:
+            raise ValueError(f"default_cadence must be one of {sorted(VALID_CADENCES)}")
+        sets.append("default_cadence = %s")
+        params.append(default_cadence)
+    if summary_detail is not None:
+        if summary_detail not in VALID_DETAIL_LEVELS:
+            raise ValueError(f"summary_detail must be one of {sorted(VALID_DETAIL_LEVELS)}")
+        sets.append("summary_detail = %s")
+        params.append(summary_detail)
+    if not sets:
+        return get_profile(user_id)
+    params.append(user_id)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE profiles SET default_cadence = %s WHERE user_id = %s RETURNING *",
-            (default_cadence, user_id),
+            f"UPDATE profiles SET {', '.join(sets)} WHERE user_id = %s RETURNING *",
+            params,
         )
         return cur.fetchone()
 
@@ -356,7 +380,8 @@ def subscribers_for_podcast(podcast_id: int) -> list[dict]:
         cur.execute(
             """
             SELECT s.user_id, s.created_at, pr.email,
-                   COALESCE(s.cadence_override, pr.default_cadence, 'instant') AS cadence
+                   COALESCE(s.cadence_override, pr.default_cadence, 'instant') AS cadence,
+                   COALESCE(pr.summary_detail, 'standard') AS detail
             FROM subscriptions s
             JOIN profiles pr ON pr.user_id = s.user_id
             WHERE s.podcast_id = %s
@@ -406,6 +431,7 @@ def queued_deliveries(cadence: str) -> list[dict]:
             JOIN profiles pr ON pr.user_id = d.user_id
             LEFT JOIN subscriptions s ON s.user_id = d.user_id AND s.podcast_id = e.podcast_id
             LEFT JOIN episode_summaries es ON es.episode_id = d.episode_id
+                  AND es.detail_level = COALESCE(pr.summary_detail, 'standard')
             WHERE d.status = 'queued'
               AND COALESCE(s.cadence_override, pr.default_cadence, 'instant') = %s
             ORDER BY d.user_id, e.published_at DESC NULLS LAST
@@ -427,7 +453,9 @@ def list_deliveries(user_id: str, limit: int = 50) -> list[dict]:
             FROM deliveries d
             JOIN episodes e ON e.id = d.episode_id
             JOIN podcasts p ON p.id = e.podcast_id
+            JOIN profiles pr ON pr.user_id = d.user_id
             LEFT JOIN episode_summaries es ON es.episode_id = d.episode_id
+                  AND es.detail_level = COALESCE(pr.summary_detail, 'standard')
             WHERE d.user_id = %s
             ORDER BY d.created_at DESC
             LIMIT %s
@@ -561,7 +589,8 @@ def profile_contact(user_id: str) -> dict | None:
     """Minimal contact info for delivery: email + effective default cadence."""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT email, COALESCE(default_cadence,'instant') AS cadence FROM profiles WHERE user_id = %s",
+            "SELECT email, COALESCE(default_cadence,'instant') AS cadence, "
+            "COALESCE(summary_detail,'standard') AS detail FROM profiles WHERE user_id = %s",
             (user_id,),
         )
         return cur.fetchone()

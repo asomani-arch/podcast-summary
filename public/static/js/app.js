@@ -172,6 +172,9 @@ async function loadProfile() {
     if (profile && profile.default_cadence) {
       document.getElementById('defaultCadence').value = profile.default_cadence;
     }
+    if (profile && profile.summary_detail) {
+      document.getElementById('summaryDetail').value = profile.summary_detail;
+    }
   } catch (_) {}
 }
 
@@ -180,6 +183,16 @@ async function saveDefaultCadence() {
   try {
     await api('/api/me', 'PATCH', { default_cadence: val });
     showToast('Default delivery updated', 'success');
+  } catch (e) {
+    showToast('Failed to update: ' + e.message, 'error');
+  }
+}
+
+async function saveSummaryDetail() {
+  const val = document.getElementById('summaryDetail').value;
+  try {
+    await api('/api/me', 'PATCH', { summary_detail: val });
+    showToast('Summary detail updated', 'success');
   } catch (e) {
     showToast('Failed to update: ' + e.message, 'error');
   }

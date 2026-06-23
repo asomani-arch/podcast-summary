@@ -81,14 +81,19 @@ def me(user: User = Depends(current_user)):
 
 
 class ProfileUpdate(BaseModel):
-    default_cadence: str
+    default_cadence: str | None = None
+    summary_detail: str | None = None
 
 
 @app.patch("/api/me")
 def update_me(req: ProfileUpdate, user: User = Depends(current_user)):
     try:
         db.ensure_profile(user.id, user.email)
-        return {"profile": db.update_profile(user.id, req.default_cadence)}
+        return {"profile": db.update_profile(
+            user.id,
+            default_cadence=req.default_cadence,
+            summary_detail=req.summary_detail,
+        )}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -158,7 +163,8 @@ class SummarizeRequest(BaseModel):
 
 @app.post("/api/summarize")
 def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user)):
-    db.ensure_profile(user.id, user.email)
+    profile = db.ensure_profile(user.id, user.email)
+    detail_level = profile.get("summary_detail") or "standard"
 
     podcast_id = db.upsert_podcast(
         req.rss_url, title=req.podcast_title, publisher=req.publisher,
@@ -172,12 +178,13 @@ def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user))
         duration_seconds=req.episode_duration_seconds, pi_episode_id=None,
     )
 
-    cached = db.get_episode_summary(episode_id)
+    cached = db.get_episode_summary(episode_id, detail_level)
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
         return {
             "episode_id": episode_id,
             "summary": cached["summary_md"],
             "source": cached.get("transcript_source"),
+            "detail_level": detail_level,
             "cached": True,
         }
 
@@ -206,16 +213,19 @@ def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user))
     marked = summarize(
         req.podcast_title, req.episode_title, text,
         transcript_source=source, episode_duration=req.episode_duration_seconds,
+        detail_level=detail_level,
     )
     summary_md = strip_summary_marker(marked)
 
     db.save_episode_summary(
         episode_id, summary_md=summary_md, target_words=None,
         transcript_source=source, model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION,
+        detail_level=detail_level,
     )
     db.record_engagement(user.id, episode_id, "summarize")
 
-    return {"episode_id": episode_id, "summary": summary_md, "source": source, "cached": False}
+    return {"episode_id": episode_id, "summary": summary_md, "source": source,
+            "detail_level": detail_level, "cached": False}
 
 
 # ── Subscriptions ──────────────────────────────────────────────────────────────
@@ -341,17 +351,19 @@ def recommendations(user: User = Depends(current_user)):
 def summarize_existing(episode_id: int, user: User = Depends(current_user)):
     """Summarize an episode already in our catalog (e.g. a recommendation),
     using its stored metadata. Respects the global cache + the daily cap."""
-    db.ensure_profile(user.id, user.email)
+    profile = db.ensure_profile(user.id, user.email)
+    detail_level = profile.get("summary_detail") or "standard"
     ep = db.get_episode_full(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found.")
 
     titles = {"episode_title": ep.get("title") or "", "podcast_title": ep.get("podcast_title") or ""}
 
-    cached = db.get_episode_summary(episode_id)
+    cached = db.get_episode_summary(episode_id, detail_level)
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
         return {"episode_id": episode_id, "summary": cached["summary_md"],
-                "source": cached.get("transcript_source"), "cached": True, **titles}
+                "source": cached.get("transcript_source"), "detail_level": detail_level,
+                "cached": True, **titles}
 
     if db.count_user_summaries_today(user.id) >= MANUAL_SUMMARY_DAILY_CAP:
         raise HTTPException(
@@ -367,11 +379,14 @@ def summarize_existing(episode_id: int, user: User = Depends(current_user)):
     summary_md = strip_summary_marker(summarize(
         ep["podcast_title"], ep["title"], text,
         transcript_source=source, episode_duration=ep.get("duration_seconds"),
+        detail_level=detail_level,
     ))
     db.save_episode_summary(episode_id, summary_md=summary_md, transcript_source=source,
-                            model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION)
+                            model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION,
+                            detail_level=detail_level)
     db.record_engagement(user.id, episode_id, "summarize")
-    return {"episode_id": episode_id, "summary": summary_md, "source": source, "cached": False, **titles}
+    return {"episode_id": episode_id, "summary": summary_md, "source": source,
+            "detail_level": detail_level, "cached": False, **titles}
 
 
 # ── Scan + delivery pipeline (called by the external scheduler) ─────────────────
@@ -422,7 +437,8 @@ def _scan_podcast(podcast: dict, tp_index: dict, tt_index: list, contacts: dict,
         if uid not in contacts:
             c = db.profile_contact(uid)
             if c:
-                contacts[uid] = {"email": c["email"], "cadence": c["cadence"]}
+                contacts[uid] = {"email": c["email"], "cadence": c["cadence"],
+                                 "detail": c.get("detail", "standard")}
 
     for ep in episodes:
         pub = db.parse_dt(ep.get("published_at"))
@@ -441,7 +457,8 @@ def _scan_podcast(podcast: dict, tp_index: dict, tt_index: list, contacts: dict,
             if s.get("created_at") and s["created_at"] < pub:
                 uid = str(s["user_id"])
                 user_reasons.setdefault(uid, []).append({"type": "show", "podcast_id": podcast["id"]})
-                contacts[uid] = {"email": s["email"], "cadence": s["cadence"]}
+                contacts[uid] = {"email": s["email"], "cadence": s["cadence"],
+                                 "detail": s.get("detail", "standard")}
 
         # 2. Tracked person/topic matches (cheap metadata extraction, only if anyone tracks anything).
         people_rows = []
@@ -478,8 +495,11 @@ def _scan_podcast(podcast: dict, tp_index: dict, tt_index: list, contacts: dict,
         if not user_reasons:
             continue  # seen + indexed, but nobody is waiting on it
 
-        summary_md = _ensure_summary(podcast, ep, episode_id, stats, errors)
-        if summary_md is None:
+        # Deliveries follow each user's chosen detail level, so generate one summary
+        # per distinct level among the matched users (reusing a single transcript fetch).
+        levels_needed = {(contacts.get(uid) or {}).get("detail", "standard") for uid in user_reasons}
+        summaries = _ensure_summaries(podcast, ep, episode_id, levels_needed, stats, errors)
+        if not summaries:
             continue
 
         for uid, reasons in user_reasons.items():
@@ -488,7 +508,9 @@ def _scan_podcast(podcast: dict, tp_index: dict, tt_index: list, contacts: dict,
                 continue  # already delivered to this user
             stats["matched"] += 1
             meta = contacts.get(uid) or {}
-            if meta.get("cadence") == "instant":
+            level = meta.get("detail", "standard")
+            summary_md = summaries.get(level) or summaries.get("standard") or next(iter(summaries.values()))
+            if meta.get("cadence") == "instant" and summary_md:
                 try:
                     send_summary_email(meta["email"], podcast["title"], ep["title"], summary_md)
                     stats["emails"] += 1
@@ -497,11 +519,23 @@ def _scan_podcast(podcast: dict, tp_index: dict, tt_index: list, contacts: dict,
                 db.mark_delivery_sent(did)
 
 
-def _ensure_summary(podcast: dict, ep: dict, episode_id: int, stats: dict, errors: list) -> str | None:
-    """Return the episode's summary, generating + caching it once if needed."""
-    cached = db.get_episode_summary(episode_id)
-    if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
-        return cached["summary_md"]
+def _ensure_summaries(
+    podcast: dict, ep: dict, episode_id: int, levels: set, stats: dict, errors: list
+) -> dict:
+    """Ensure a cached summary exists for each requested detail level, generating any
+    missing ones from a single shared transcript fetch. Returns {level: summary_md}."""
+    levels = {l for l in levels if l in db.VALID_DETAIL_LEVELS} or {"standard"}
+    out: dict[str, str] = {}
+    missing: list[str] = []
+    for lvl in levels:
+        cached = db.get_episode_summary(episode_id, lvl)
+        if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
+            out[lvl] = cached["summary_md"]
+        else:
+            missing.append(lvl)
+    if not missing:
+        return out
+
     text, source = get_transcript(
         podcast["title"], ep["title"], ep.get("description", ""),
         ep.get("audio_url", ""), ep.get("episode_url", ""),
@@ -509,17 +543,21 @@ def _ensure_summary(podcast: dict, ep: dict, episode_id: int, stats: dict, error
     )
     if not text:
         errors.append(f"no transcript: {podcast.get('title','?')} — {ep.get('title','?')}")
-        return None
-    summary_md = strip_summary_marker(summarize(
-        podcast["title"], ep["title"], text,
-        transcript_source=source, episode_duration=ep.get("duration_seconds"),
-    ))
-    db.save_episode_summary(
-        episode_id, summary_md=summary_md, transcript_source=source,
-        model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION,
-    )
-    stats["summarized"] += 1
-    return summary_md
+        return out
+
+    for lvl in missing:
+        summary_md = strip_summary_marker(summarize(
+            podcast["title"], ep["title"], text,
+            transcript_source=source, episode_duration=ep.get("duration_seconds"),
+            detail_level=lvl,
+        ))
+        db.save_episode_summary(
+            episode_id, summary_md=summary_md, transcript_source=source,
+            model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION, detail_level=lvl,
+        )
+        stats["summarized"] += 1
+        out[lvl] = summary_md
+    return out
 
 
 @app.post("/api/admin/seed-popular")

@@ -251,6 +251,23 @@ BEGIN
 END;
 $$;
 
+-- ── Migration: titratable summary detail (Quick / Standard / Deep) ─────────────
+-- Cache one summary variant per (episode, detail_level) instead of one per episode,
+-- and let each user pick their preferred depth (which also drives their deliveries).
+-- Idempotent: safe to re-run.
+
+ALTER TABLE episode_summaries
+  ADD COLUMN IF NOT EXISTS detail_level TEXT NOT NULL DEFAULT 'standard';
+-- Drop the old one-summary-per-episode unique constraint; key on (episode, level).
+ALTER TABLE episode_summaries
+  DROP CONSTRAINT IF EXISTS episode_summaries_episode_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_episode_summaries_episode_level
+  ON episode_summaries (episode_id, detail_level);
+
+ALTER TABLE profiles
+  ADD COLUMN IF NOT EXISTS summary_detail TEXT NOT NULL DEFAULT 'standard'
+  CHECK (summary_detail IN ('quick','standard','deep'));
+
 -- ============================================================================
 -- Done. Next: the FastAPI backend reads SUPABASE_URL / SUPABASE_ANON_KEY /
 -- SUPABASE_SERVICE_ROLE_KEY and a POSTGRES connection string from env.

@@ -100,10 +100,21 @@ def _parse_duration_seconds(duration: str | int | None) -> int | None:
     return seconds or None
 
 
-def _target_words(duration_seconds: int | None) -> int:
+# Detail levels titrate length + depth on top of the duration baseline.
+# 'standard' reproduces the original behavior exactly (mult 1.0, same floor/cap).
+DETAIL_LEVELS = {
+    "quick":    {"mult": 0.35, "min": 120, "max": 350},
+    "standard": {"mult": 1.0,  "min": MIN_TARGET_WORDS, "max": MAX_TARGET_WORDS},
+    "deep":     {"mult": 1.8,  "min": 600, "max": 5000},
+}
+DEFAULT_DETAIL_LEVEL = "standard"
+
+
+def _target_words(duration_seconds: int | None, detail_level: str = DEFAULT_DETAIL_LEVEL) -> int:
     seconds = duration_seconds or DEFAULT_DURATION_SECONDS
-    raw = round(WORDS_PER_HOUR * seconds / 3600)
-    return max(MIN_TARGET_WORDS, min(MAX_TARGET_WORDS, raw))
+    raw = WORDS_PER_HOUR * seconds / 3600
+    cfg = DETAIL_LEVELS.get(detail_level, DETAIL_LEVELS[DEFAULT_DETAIL_LEVEL])
+    return max(cfg["min"], min(cfg["max"], round(raw * cfg["mult"])))
 
 
 def _duration_phrase(duration_seconds: int | None) -> str:
@@ -126,8 +137,9 @@ def _build_prompt(
     transcript_source: str,
     duration_seconds: int | None,
     focus_person: str | None,
+    detail_level: str = DEFAULT_DETAIL_LEVEL,
 ) -> tuple[str, int]:
-    target_words = _target_words(duration_seconds)
+    target_words = _target_words(duration_seconds, detail_level)
 
     # Never ask for more output than the source can actually support — this stops
     # a thin show-notes blurb being padded into a fabricated 1,000-word essay.
@@ -157,6 +169,50 @@ def _build_prompt(
             f"{focus_person}'s contributions, claims, and the segments featuring them."
         )
 
+    if detail_level == "quick":
+        sections_block = (
+            f"{length_note}Write a fast-skim brief of about {target_words} words. Use "
+            "GitHub-flavored markdown. Produce exactly these two sections, and nothing else:\n\n"
+            "## TL;DR\n"
+            "2-3 sentences capturing the single most investor-relevant thread of the episode.\n\n"
+            "## Bottom-Line Takeaways\n"
+            "3-5 bullets. Start each with a **bold takeaway** then a sentence of crisp "
+            "analysis. These are the punchlines an investor would repeat."
+            f"{focus_instruction}\n\n"
+            "Do NOT add a detailed walkthrough, quotes, company lists, or any other "
+            "section — keep it to the two headings above.\n\n"
+        )
+    else:
+        depth_note = ""
+        if detail_level == "deep":
+            depth_note = (
+                "This is a DEEP brief for a reader who wants maximum coverage: be "
+                "exhaustive in the walkthrough, use more ### subheadings, and capture more "
+                "of the specific quotes, figures, and back-and-forth than you otherwise would.\n\n"
+            )
+        sections_block = (
+            f"{length_note}Write approximately {target_words} words total. Use "
+            "GitHub-flavored markdown. Produce exactly these sections, in this order:\n\n"
+            f"{depth_note}"
+            "## TL;DR\n"
+            "2-3 sentences capturing the single most investor-relevant thread of the episode.\n\n"
+            "## Bottom-Line Takeaways\n"
+            "3-5 bullets. Start each with a **bold takeaway** then a sentence or two of "
+            "crisp analysis. These are the punchlines an investor would repeat.\n\n"
+            "## Detailed Walkthrough\n"
+            "The substance, and where most of the words go. Use ### thematic subheadings "
+            "(one per major thread or segment) and cover every meaningful argument, "
+            "example, data point, and disagreement in the episode."
+            f"{focus_instruction}\n\n"
+            "## Notable Quotes\n"
+            "Only if there are genuinely striking, verbatim quotes: 1-3 short quotes with "
+            "attribution. Omit this heading entirely if nothing stands out.\n\n"
+            "## Companies, Sectors & Numbers\n"
+            "Only when present in the source: a compact list of the specific companies, "
+            "sectors, markets, and figures mentioned, for an investor scanning for names. "
+            "Omit this heading entirely if the episode is abstract.\n\n"
+        )
+
     prompt = (
         "You write detailed, investor-grade podcast briefs for time-constrained "
         "private-equity professionals. Your reader wants to *not miss anything that "
@@ -174,25 +230,7 @@ def _build_prompt(
         "by', 'use code', 'visit <site>.com/<show>', 'sign up today', recurring "
         "host-read pitches for unrelated products.\n\n"
         f"{source_note_requirement}"
-        f"{length_note}Write approximately {target_words} words total. Use "
-        "GitHub-flavored markdown. Produce exactly these sections, in this order:\n\n"
-        "## TL;DR\n"
-        "2-3 sentences capturing the single most investor-relevant thread of the episode.\n\n"
-        "## Bottom-Line Takeaways\n"
-        "3-5 bullets. Start each with a **bold takeaway** then a sentence or two of "
-        "crisp analysis. These are the punchlines an investor would repeat.\n\n"
-        "## Detailed Walkthrough\n"
-        "The substance, and where most of the words go. Use ### thematic subheadings "
-        "(one per major thread or segment) and cover every meaningful argument, "
-        "example, data point, and disagreement in the episode."
-        f"{focus_instruction}\n\n"
-        "## Notable Quotes\n"
-        "Only if there are genuinely striking, verbatim quotes: 1-3 short quotes with "
-        "attribution. Omit this heading entirely if nothing stands out.\n\n"
-        "## Companies, Sectors & Numbers\n"
-        "Only when present in the source: a compact list of the specific companies, "
-        "sectors, markets, and figures mentioned, for an investor scanning for names. "
-        "Omit this heading entirely if the episode is abstract.\n\n"
+        f"{sections_block}"
         "Private-equity lens:\n"
         "- Prioritize insight relevant to deal sourcing, diligence, underwriting, "
         "portfolio operations, value creation, management quality, industry structure, "
@@ -222,6 +260,7 @@ def summarize(
     transcript_source: str = "",
     episode_duration: str | int | None = None,
     focus_person: str | None = None,
+    detail_level: str = DEFAULT_DETAIL_LEVEL,
 ) -> str:
     duration_seconds = _parse_duration_seconds(episode_duration)
     prompt, max_tokens = _build_prompt(
@@ -231,6 +270,7 @@ def summarize(
         transcript_source,
         duration_seconds,
         focus_person,
+        detail_level,
     )
     response = client().models.generate_content(
         model="gemini-2.5-flash",
