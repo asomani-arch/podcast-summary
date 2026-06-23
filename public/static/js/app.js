@@ -64,6 +64,9 @@ function showApp(user) {
   document.getElementById('accountEmail').textContent = user.email || '';
   loadProfile();
   loadSubscriptions();
+  loadPeople();
+  loadTopics();
+  loadRecommendations();
 }
 
 function showLogin() {
@@ -180,8 +183,8 @@ function clearResults() {
   document.getElementById('searchResults').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
   document.getElementById('inboxView').classList.add('hidden');
-  document.getElementById('discoverView').classList.add('hidden');
-  document.getElementById('emptyState').classList.remove('hidden');
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('discoverView').classList.remove('hidden');
   state.currentPodcast = null;
   state.episodes = [];
   closePanel();
@@ -421,8 +424,6 @@ function toggleSubsTray() {
     backdrop.classList.remove('hidden');
     loadSubscriptions();
     loadStatus();
-    loadPeople();
-    loadTopics();
   } else {
     tray.classList.remove('open');
     backdrop.classList.add('hidden');
@@ -549,6 +550,14 @@ async function showDiscover() {
   document.getElementById('emptyState').classList.add('hidden');
   document.getElementById('inboxView').classList.add('hidden');
   document.getElementById('discoverView').classList.remove('hidden');
+  await loadRecommendations();
+}
+
+async function refreshDiscover() {
+  await loadRecommendations();
+}
+
+async function loadRecommendations() {
   document.getElementById('discoverList').innerHTML = skeletons(4);
   try {
     const data = await api('/api/recommendations');
@@ -563,7 +572,7 @@ function renderDiscover() {
   const list = document.getElementById('discoverList');
   list.innerHTML = '';
   if (!state.recommendations.length) {
-    list.innerHTML = '<p class="no-results">No recommendations yet. Follow some people or topics, then check back as new episodes are scanned.</p>';
+    list.innerHTML = '<p class="no-results">No matches yet. Follow a person or topic above, then refresh as new episodes are scanned.</p>';
     return;
   }
   state.recommendations.forEach((r, i) => {
@@ -635,15 +644,15 @@ function renderPeople() {
   const list = document.getElementById('peopleList');
   if (!list) return;
   if (!state.people.length) {
-    list.innerHTML = '<p class="no-subs">No one yet. Add a person above.</p>';
+    list.innerHTML = '<p class="chip-empty">No people followed yet.</p>';
     return;
   }
   list.innerHTML = '';
   state.people.forEach(p => {
     const el = document.createElement('div');
-    el.className = 'person-item';
-    el.innerHTML = `<span class="person-name">${esc(p.name)}</span>
-      <button class="person-remove" onclick="removePerson(${p.person_id})">Remove</button>`;
+    el.className = 'follow-chip';
+    el.innerHTML = `<span>${esc(p.name)}</span>
+      <button type="button" aria-label="Remove ${esc(p.name)}" onclick="removePerson(${p.person_id})">&times;</button>`;
     list.appendChild(el);
   });
 }
@@ -657,6 +666,7 @@ async function addPerson(event) {
     await api('/api/people', 'POST', { name });
     input.value = '';
     await loadPeople();
+    await loadRecommendations();
     showToast(`Now following ${name}`, 'success');
   } catch (e) {
     showToast('Failed to add: ' + e.message, 'error');
@@ -668,6 +678,7 @@ async function removePerson(personId) {
   try {
     await api(`/api/people?person_id=${personId}`, 'DELETE');
     await loadPeople();
+    await loadRecommendations();
   } catch (e) {
     showToast('Failed to remove: ' + e.message, 'error');
   }
@@ -686,15 +697,15 @@ function renderTopics() {
   const list = document.getElementById('topicsList');
   if (!list) return;
   if (!state.topics.length) {
-    list.innerHTML = '<p class="no-subs">No topics yet. Add one above.</p>';
+    list.innerHTML = '<p class="chip-empty">No topics followed yet.</p>';
     return;
   }
   list.innerHTML = '';
   state.topics.forEach(t => {
     const el = document.createElement('div');
-    el.className = 'person-item';
-    el.innerHTML = `<span class="person-name">${esc(t.topic)}</span>
-      <button class="person-remove" onclick="removeTopic(${t.id})">Remove</button>`;
+    el.className = 'follow-chip';
+    el.innerHTML = `<span>${esc(t.topic)}</span>
+      <button type="button" aria-label="Remove ${esc(t.topic)}" onclick="removeTopic(${t.id})">&times;</button>`;
     list.appendChild(el);
   });
 }
@@ -708,6 +719,7 @@ async function addTopic(event) {
     await api('/api/topics', 'POST', { topic });
     input.value = '';
     await loadTopics();
+    await loadRecommendations();
     showToast(`Now following "${topic}"`, 'success');
   } catch (e) {
     showToast('Failed to add: ' + e.message, 'error');
@@ -719,6 +731,7 @@ async function removeTopic(topicId) {
   try {
     await api(`/api/topics?topic_id=${topicId}`, 'DELETE');
     await loadTopics();
+    await loadRecommendations();
   } catch (e) {
     showToast('Failed to remove: ' + e.message, 'error');
   }
@@ -727,8 +740,8 @@ async function removeTopic(topicId) {
 function reasonBadges(reasons) {
   if (!Array.isArray(reasons)) return '';
   const badges = reasons.map(r => {
-    if (r.type === 'person') return `👤 ${esc(r.name || 'tracked person')}`;
-    if (r.type === 'topic') return `🏷️ ${esc(r.topic || 'tracked topic')}`;
+    if (r.type === 'person') return `Person: ${esc(r.name || 'tracked person')}`;
+    if (r.type === 'topic') return `Topic: ${esc(r.topic || 'tracked topic')}`;
     return null;
   }).filter(Boolean);
   if (!badges.length) return '';

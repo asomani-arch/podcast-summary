@@ -66,24 +66,6 @@
     .inbox-meta { color: var(--text-2); font-size: .8rem; margin: .2rem 0 0; }
     .tray-status { font-size: .8rem; color: var(--text-2); padding: 0 0 12px; }
     .tray-status .status-error { color: var(--danger); }
-    /* People tracking */
-    .tray-section-label { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em;
-      color: var(--text-3); margin: 26px 0 4px; }
-    .tray-section-hint { font-size: .8rem; color: var(--text-2); margin: 0 0 12px; }
-    .people-add { display: flex; gap: 8px; margin-bottom: 12px; }
-    .people-add input { flex: 1; padding: 9px 12px; border: 1px solid var(--border-bright);
-      border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text);
-      font-family: inherit; font-size: .88rem; }
-    .people-add input::placeholder { color: var(--text-3); }
-    .people-add input:focus { outline: none; border-color: var(--accent); }
-    .people-add button { padding: 9px 14px; border: none; border-radius: var(--radius-sm);
-      background: var(--accent); color: #000; font-weight: 600; cursor: pointer; font-family: inherit; }
-    .person-item { display: flex; align-items: center; justify-content: space-between; gap: 10px;
-      padding: 9px 2px; border-bottom: 1px solid var(--border); }
-    .person-name { font-size: .9rem; color: var(--text); }
-    .person-remove { background: none; border: none; color: var(--text-2); cursor: pointer;
-      font-size: .78rem; font-family: inherit; }
-    .person-remove:hover { color: var(--danger); }
     .inbox-reasons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; }
     .reason-badge { font-size: .7rem; padding: 2px 8px; border-radius: 999px;
       background: var(--accent-dim); color: var(--accent); }
@@ -156,7 +138,45 @@
 
   <main class="main hidden" id="appMain">
 
-    <div class="empty-state" id="emptyState">
+    <div class="discover-view" id="discoverView">
+      <div class="discover-head">
+        <div>
+          <p class="section-label">Discovery</p>
+          <h2 class="discover-title">Follow people and topics you care about.</h2>
+          <p class="discover-sub">New matching episodes show up here, without digging through every show yourself.</p>
+        </div>
+      </div>
+
+      <div class="discovery-actions">
+        <form class="discovery-add" onsubmit="return addPerson(event)">
+          <input type="text" id="personInput" placeholder="Person, e.g. Jensen Huang" autocomplete="off" spellcheck="false" />
+          <button type="submit">Follow</button>
+        </form>
+        <form class="discovery-add" onsubmit="return addTopic(event)">
+          <input type="text" id="topicInput" placeholder="Topic, e.g. AI infrastructure" autocomplete="off" spellcheck="false" />
+          <button type="submit">Follow</button>
+        </form>
+      </div>
+
+      <div class="followed-grid">
+        <div class="followed-group">
+          <p class="followed-label">People</p>
+          <div class="chip-list" id="peopleList"></div>
+        </div>
+        <div class="followed-group">
+          <p class="followed-label">Topics</p>
+          <div class="chip-list" id="topicsList"></div>
+        </div>
+      </div>
+
+      <div class="discovery-results-head">
+        <p class="section-label">Recommended episodes</p>
+        <button class="btn-refresh" onclick="refreshDiscover()">Refresh</button>
+      </div>
+      <div class="inbox-list" id="discoverList"></div>
+    </div>
+
+    <div class="empty-state hidden" id="emptyState">
       <svg class="empty-icon" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
         <circle cx="40" cy="40" r="28" stroke="currentColor" stroke-width="1.2" opacity="0.2"/>
         <circle cx="40" cy="40" r="16" stroke="currentColor" stroke-width="1.5" opacity="0.35"/>
@@ -210,12 +230,6 @@
       <div class="inbox-list" id="inboxList"></div>
     </div>
 
-    <div class="inbox-view hidden" id="discoverView">
-      <p class="section-label">Recommended for you</p>
-      <p class="tray-section-hint">Episodes featuring people and topics you follow.</p>
-      <div class="inbox-list" id="discoverList"></div>
-    </div>
-
   </main>
 
   <!-- Summary Panel -->
@@ -258,22 +272,6 @@
     </div>
     <div class="tray-status" id="trayStatus"></div>
     <div class="subs-list" id="subsList"></div>
-
-    <div class="tray-section-label">People you follow</div>
-    <p class="tray-section-hint">Get a summary whenever they appear on a show you follow or a popular podcast.</p>
-    <form class="people-add" onsubmit="return addPerson(event)">
-      <input type="text" id="personInput" placeholder="Add a person — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
-      <button type="submit">Add</button>
-    </form>
-    <div class="people-list" id="peopleList"></div>
-
-    <div class="tray-section-label">Topics you follow</div>
-    <p class="tray-section-hint">Get a summary when an episode substantially covers a topic.</p>
-    <form class="people-add" onsubmit="return addTopic(event)">
-      <input type="text" id="topicInput" placeholder="Add a topic — e.g. AI infrastructure" autocomplete="off" spellcheck="false" />
-      <button type="submit">Add</button>
-    </form>
-    <div class="people-list" id="topicsList"></div>
   </div>
 
   <!-- Toast -->
