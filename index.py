@@ -523,7 +523,8 @@ def summarize_existing(
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found.")
 
-    titles = {"episode_title": ep.get("title") or "", "podcast_title": ep.get("podcast_title") or ""}
+    titles = {"episode_title": ep.get("title") or "", "podcast_title": ep.get("podcast_title") or "",
+              "episode_url": ep.get("episode_url") or "", "audio_url": ep.get("audio_url") or ""}
 
     cached = db.get_episode_summary(episode_id, detail_level)
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
