@@ -262,6 +262,21 @@ def _resolve_detail(req_level: str | None, profile: dict) -> str:
     return profile.get("summary_detail") or "standard"
 
 
+def _ai_configured() -> bool:
+    """The summarizer needs a Gemini key. Missing it (e.g. a preview deploy that
+    didn't inherit the production secret) should yield a clear 503, not a raw 500."""
+    return bool(os.getenv("GEMINI_API_KEY"))
+
+
+def _require_ai() -> None:
+    if not _ai_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Summaries are temporarily unavailable — the AI service isn't configured "
+                   "for this environment. (Production has it; this preview is missing GEMINI_API_KEY.)",
+        )
+
+
 @app.post("/api/summarize")
 def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user)):
     profile = db.ensure_profile(user.id, user.email)
@@ -299,6 +314,7 @@ def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user))
             ),
         )
 
+    _require_ai()
     text, source = get_transcript(
         req.podcast_title, req.episode_title, req.episode_description,
         req.episode_audio_url, req.episode_url,
@@ -414,6 +430,8 @@ def seed_latest_episode(podcast_id: int, user: User = Depends(current_user)):
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
         summary_md, source = cached["summary_md"], cached.get("transcript_source")
     else:
+        if not _ai_configured():
+            return {"seeded": False, "reason": "ai_unconfigured"}
         text, source = get_transcript(
             podcast["title"], ep["title"], ep.get("description", ""),
             ep.get("audio_url", ""), ep.get("episode_url", ""),
@@ -537,6 +555,7 @@ def summarize_existing(
             status_code=429,
             detail=f"Daily limit of {MANUAL_SUMMARY_DAILY_CAP} on-demand summaries reached.",
         )
+    _require_ai()
     text, source = get_transcript(
         ep["podcast_title"], ep["title"], ep.get("description") or "",
         ep.get("audio_url") or "", ep.get("episode_url") or "",
