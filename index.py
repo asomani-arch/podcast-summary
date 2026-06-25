@@ -296,6 +296,7 @@ def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user))
 
     cached = db.get_episode_summary(episode_id, detail_level)
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
+        _record_read_delivery(user.id, episode_id)
         return {
             "episode_id": episode_id,
             "summary": cached["summary_md"],
@@ -340,6 +341,7 @@ def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user))
         detail_level=detail_level,
     )
     db.record_engagement(user.id, episode_id, "summarize")
+    _record_read_delivery(user.id, episode_id)
 
     return {"episode_id": episode_id, "summary": summary_md, "source": source,
             "detail_level": detail_level, "cached": False}
@@ -398,20 +400,21 @@ def update_subscription(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/subscriptions/{podcast_id}/seed-latest")
-def seed_latest_episode(podcast_id: int, user: User = Depends(current_user)):
-    """Right after subscribing, summarize the show's most recent episode and drop it
-    into the user's My Summaries — so subscribing produces an immediate, visible
-    result instead of an empty inbox until the next new episode airs.
+def _record_read_delivery(user_id: str, episode_id: int) -> None:
+    """Put a summary the user just opened into their My Summaries. Deduped per
+    (user, episode) and marked 'sent' so the digest never re-emails it. This is what
+    makes 'I summarized/read this' actually show up in My Summaries."""
+    try:
+        did = db.create_delivery(user_id, episode_id, [{"type": "opened"}], status="sent")
+        if did is not None:
+            db.mark_delivery_sent(did)
+    except Exception:
+        pass  # never fail a summary response just because the bookkeeping write hiccuped
 
-    Idempotent and cheap: the summary is globally cached, the delivery is deduped per
-    (user, episode), and it bypasses the manual daily cap (system backfill, one ep)."""
-    profile = db.ensure_profile(user.id, user.email)
-    detail_level = profile.get("summary_detail") or "standard"
-    podcast = db.get_podcast(podcast_id)
-    if not podcast or not podcast.get("rss_url"):
-        raise HTTPException(status_code=404, detail="Podcast not found.")
 
+def _seed_latest_episode(user_id: str, podcast: dict, detail_level: str) -> dict:
+    """Summarize a show's most recent episode and drop it into the user's My
+    Summaries. Globally cached + delivery deduped, so it's safe to call repeatedly."""
     try:
         episodes = catalog.episodes_from_rss(podcast["rss_url"], max_results=1)
     except Exception:
@@ -421,7 +424,7 @@ def seed_latest_episode(podcast_id: int, user: User = Depends(current_user)):
 
     ep = episodes[0]
     episode_id = db.upsert_episode(
-        podcast_id, ep["guid"], title=ep["title"], description=ep.get("description", ""),
+        podcast["id"], ep["guid"], title=ep["title"], description=ep.get("description", ""),
         audio_url=ep.get("audio_url", ""), episode_url=ep.get("episode_url", ""),
         published_at=ep.get("published_at"), duration_seconds=ep.get("duration_seconds"),
     )
@@ -449,12 +452,47 @@ def seed_latest_episode(podcast_id: int, user: User = Depends(current_user)):
             model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION, detail_level=detail_level,
         )
 
-    reasons = [{"type": "show", "podcast_id": podcast_id}]
-    did = db.create_delivery(user.id, episode_id, reasons, status="sent")
+    reasons = [{"type": "show", "podcast_id": podcast["id"]}]
+    did = db.create_delivery(user_id, episode_id, reasons, status="sent")
     if did is not None:
         db.mark_delivery_sent(did)
     return {"seeded": True, "episode_id": episode_id, "episode_title": ep["title"],
             "summary": summary_md, "source": source, "detail_level": detail_level}
+
+
+@app.post("/api/subscriptions/{podcast_id}/seed-latest")
+def seed_latest_episode(podcast_id: int, user: User = Depends(current_user)):
+    """Right after subscribing, summarize the show's most recent episode and drop it
+    into the user's My Summaries — so subscribing produces an immediate, visible
+    result instead of an empty inbox until the next new episode airs."""
+    profile = db.ensure_profile(user.id, user.email)
+    detail_level = profile.get("summary_detail") or "standard"
+    podcast = db.get_podcast(podcast_id)
+    if not podcast or not podcast.get("rss_url"):
+        raise HTTPException(status_code=404, detail="Podcast not found.")
+    return _seed_latest_episode(user.id, podcast, detail_level)
+
+
+@app.post("/api/deliveries/backfill")
+def backfill_deliveries(user: User = Depends(current_user)):
+    """Self-heal: for subscriptions that have never delivered anything (e.g. created
+    before on-subscribe seeding worked), summarize their latest episode now. Bounded
+    per call so it stays within the function timeout; the frontend calls it when My
+    Summaries is empty but the user has subscriptions."""
+    profile = db.ensure_profile(user.id, user.email)
+    detail_level = profile.get("summary_detail") or "standard"
+    pending = db.subscriptions_without_deliveries(user.id, limit=2)
+    seeded = 0
+    for row in pending:
+        podcast = db.get_podcast(row["podcast_id"])
+        if not podcast or not podcast.get("rss_url"):
+            continue
+        try:
+            if _seed_latest_episode(user.id, podcast, detail_level).get("seeded"):
+                seeded += 1
+        except Exception:
+            continue
+    return {"seeded": seeded, "checked": len(pending)}
 
 
 # ── People tracking ────────────────────────────────────────────────────────────
@@ -546,6 +584,7 @@ def summarize_existing(
 
     cached = db.get_episode_summary(episode_id, detail_level)
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
+        _record_read_delivery(user.id, episode_id)
         return {"episode_id": episode_id, "summary": cached["summary_md"],
                 "source": cached.get("transcript_source"), "detail_level": detail_level,
                 "cached": True, **titles}
@@ -571,6 +610,7 @@ def summarize_existing(
                             model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION,
                             detail_level=detail_level)
     db.record_engagement(user.id, episode_id, "summarize")
+    _record_read_delivery(user.id, episode_id)
     return {"episode_id": episode_id, "summary": summary_md, "source": source,
             "detail_level": detail_level, "cached": False, **titles}
 

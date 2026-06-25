@@ -963,6 +963,12 @@ async function showInbox() {
   try {
     const data = await api('/api/deliveries');
     state.deliveries = data.deliveries || [];
+    // Empty inbox but the user follows shows? Backfill the latest episode of any
+    // subscription that never delivered one (self-heals subs made before seeding worked).
+    if (!state.deliveries.length) {
+      if (!state.subscriptions.length) { try { await loadSubscriptions(); } catch (_) {} }
+      if (state.subscriptions.length) { await backfillInbox(); return; }
+    }
     renderInbox();
   } catch (e) {
     document.getElementById('inboxList').innerHTML =
@@ -970,11 +976,30 @@ async function showInbox() {
   }
 }
 
+// Seed the latest episode for subscriptions that have nothing delivered yet, then
+// reload. Shows a generating state because summarizing can take a minute.
+async function backfillInbox() {
+  document.getElementById('inboxList').innerHTML = `
+    <div class="panel-loading">
+      <div class="spinner large"></div>
+      <p>Preparing your summaries…</p>
+      <p class="loading-hint">Summarizing the latest episode from the shows you follow — this can take a minute.</p>
+    </div>`;
+  try { await api('/api/deliveries/backfill', 'POST'); } catch (_) {}
+  try {
+    const data = await api('/api/deliveries');
+    state.deliveries = data.deliveries || [];
+  } catch (_) {}
+  renderInbox();
+}
+
 function renderInbox() {
   const list = document.getElementById('inboxList');
   list.innerHTML = '';
   if (!state.deliveries.length) {
-    list.innerHTML = '<p class="no-results">No summaries yet. Subscribe to a show and new episodes will land here.</p>';
+    list.innerHTML = state.subscriptions.length
+      ? '<p class="no-results">No summaries yet — the latest episodes of your shows may not have transcripts available, or are still processing. New episodes will appear here automatically as they air.</p>'
+      : '<p class="no-results">No summaries yet. Subscribe to a show and its latest episode will be summarized here.</p>';
     return;
   }
   state.deliveries.forEach((d, i) => {

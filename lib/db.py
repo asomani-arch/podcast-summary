@@ -306,6 +306,29 @@ def list_subscriptions(user_id: str) -> list[dict]:
         return cur.fetchall()
 
 
+def subscriptions_without_deliveries(user_id: str, limit: int = 3) -> list[dict]:
+    """Subscriptions for which the user has never received a delivery — used to
+    backfill (seed the latest episode) for subs that predate on-subscribe seeding.
+    Newest subscriptions first."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.podcast_id
+            FROM subscriptions s
+            WHERE s.user_id = %s
+              AND NOT EXISTS (
+                SELECT 1 FROM deliveries d
+                JOIN episodes e ON e.id = d.episode_id
+                WHERE d.user_id = s.user_id AND e.podcast_id = s.podcast_id
+              )
+            ORDER BY s.created_at DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        )
+        return cur.fetchall()
+
+
 def subscribed_rss_urls(user_id: str) -> set[str]:
     """Normalized (lowercased, trailing-slash-stripped) rss_urls the user follows —
     for annotating search results."""
