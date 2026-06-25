@@ -12,10 +12,15 @@ const state = {
   deliveries: [],
   recommendations: [],
   trayOpen: false,
+  settingsOpen: false,
   loadingTimer: null,
   // Context for the currently-open summary panel, used by the Share control.
   share: { episodeId: null, title: '', podcast: '', text: '' },
   pendingDeepLink: null,   // episode_id from a ?ep= share link, opened after sign-in
+  lastAuthEmail: '',       // for the auth "resend" affordance
+  panelReq: 0,             // monotonic token: ignore stale in-flight summary responses
+  // How to (re)generate the currently-open summary at a chosen detail level.
+  panelCtx: null,          // { regenerate(level): Promise, level, episodeUrl, audioUrl, episodeId }
 };
 
 const CADENCE_LABELS = { instant: 'Instant', daily: 'Daily digest', weekly: 'Weekly digest' };
@@ -38,6 +43,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!e.target.closest('#profileMenu')) closeProfileMenu();
     if (!e.target.closest('#shareMenu')) closeShareMenu();
   });
+  // Esc closes whatever overlay is open (dropdowns → panel → trays), top-down.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const dd = document.getElementById('profileDropdown');
+    const sd = document.getElementById('shareDropdown');
+    if (dd && !dd.classList.contains('hidden')) { closeProfileMenu(); return; }
+    if (sd && !sd.classList.contains('hidden')) { closeShareMenu(); return; }
+    if (document.getElementById('summaryPanel').classList.contains('open')) { closePanel(); return; }
+    if (state.trayOpen) { toggleSubsTray(); return; }
+    if (state.settingsOpen) { toggleSettings(); return; }
+  });
+  // Mobile/browser Back dismisses an open summary panel instead of leaving the app.
+  window.addEventListener('popstate', () => {
+    if (document.getElementById('summaryPanel').classList.contains('open')) closePanel(true);
+  });
   initAuth();
 });
 
@@ -59,23 +79,36 @@ async function initAuth() {
 function applySession(session) {
   state.session = session;
   if (session) {
+    document.getElementById('publicView').classList.add('hidden');
     if (!state.appLoaded) {
       state.appLoaded = true;
       showApp(session.user);
     }
   } else {
     state.appLoaded = false;
-    showLogin();
+    // A shared ?ep= link works signed-out: show the summary publicly with a sign-up CTA,
+    // rather than dead-ending newcomers on the login wall.
+    if (state.pendingDeepLink) {
+      const epId = state.pendingDeepLink;
+      state.pendingDeepLink = null;
+      showPublicSummary(epId);
+    } else {
+      showLogin();
+    }
   }
 }
 
 function showApp(user) {
   document.getElementById('authOverlay').classList.add('hidden');
+  document.getElementById('publicView').classList.add('hidden');
   ['appHeader', 'appHero', 'appMain'].forEach(id => document.getElementById(id).classList.remove('hidden'));
   document.getElementById('accountEmail').textContent = user.email || '';
+  const sEmail = document.getElementById('settingsEmail');
+  if (sEmail) sEmail.textContent = user.email || '';
   setProfileAvatar(user.email || '');
   loadProfile();
   loadSubscriptions();
+  loadHomeDiscovery();
   if (state.pendingDeepLink) {
     const epId = state.pendingDeepLink;
     state.pendingDeepLink = null;
@@ -132,16 +165,26 @@ function goHome(event) {
 
 function showLogin() {
   document.getElementById('authOverlay').classList.remove('hidden');
+  document.getElementById('publicView').classList.add('hidden');
   ['appHeader', 'appHero', 'appMain'].forEach(id => document.getElementById(id).classList.add('hidden'));
 }
 
 async function sendMagicLink(event) {
-  event.preventDefault();
+  if (event) event.preventDefault();
   const email = document.getElementById('authEmail').value.trim();
+  if (!email) return false;
+  state.lastAuthEmail = email;
+  await deliverMagicLink(email);
+  return false;
+}
+
+// Shared by the form submit and the "Resend" link.
+async function deliverMagicLink(email) {
   const btn = document.getElementById('authBtn');
   const msg = document.getElementById('authMsg');
-  if (!email) return false;
+  const resend = document.getElementById('authResend');
   btn.disabled = true; btn.textContent = 'Sending…'; msg.textContent = '';
+  if (resend) resend.classList.add('hidden');
   try {
     const { error } = await state.supabase.auth.signInWithOtp({
       email,
@@ -151,12 +194,19 @@ async function sendMagicLink(event) {
     msg.textContent = 'Check your email for the sign-in link — it expires in 1 hour.';
     msg.className = 'auth-msg ok';
     btn.textContent = 'Link sent';
+    // Offer a resend after a short delay in case it didn't arrive.
+    if (resend) setTimeout(() => resend.classList.remove('hidden'), 8000);
   } catch (e) {
     msg.textContent = e.message || 'Could not send the link.';
     msg.className = 'auth-msg error';
     btn.disabled = false; btn.textContent = 'Send sign-in link';
   }
-  return false;
+}
+
+async function resendMagicLink() {
+  const email = state.lastAuthEmail || document.getElementById('authEmail').value.trim();
+  if (!email) return;
+  await deliverMagicLink(email);
 }
 
 async function signOut() {
@@ -195,6 +245,59 @@ async function saveSummaryDetail() {
     showToast('Summary detail updated', 'success');
   } catch (e) {
     showToast('Failed to update: ' + e.message, 'error');
+  }
+}
+
+/* ── SETTINGS PANEL ─────────────────────────────────────── */
+function toggleSettings() {
+  state.settingsOpen = !state.settingsOpen;
+  const panel = document.getElementById('settingsPanel');
+  const backdrop = document.getElementById('settingsBackdrop');
+  if (state.settingsOpen) {
+    closeProfileMenu();
+    panel.classList.add('open');
+    backdrop.classList.remove('hidden');
+    loadProfile();
+  } else {
+    panel.classList.remove('open');
+    backdrop.classList.add('hidden');
+  }
+}
+
+// From the Subscriptions tray's "Settings" link: close the tray, open Settings.
+function openSettingsFromTray() {
+  if (state.trayOpen) toggleSubsTray();
+  if (!state.settingsOpen) toggleSettings();
+}
+
+async function exportData() {
+  try {
+    const data = await api('/api/me/export');
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'podcastai-my-data.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Your data is downloading', 'success');
+  } catch (e) {
+    showToast('Export failed: ' + e.message, 'error');
+  }
+}
+
+async function deleteAccount() {
+  const ok = window.confirm(
+    'Delete your account and all your data permanently? This cannot be undone.'
+  );
+  if (!ok) return;
+  try {
+    await api('/api/me', 'DELETE');
+    showToast('Your account has been deleted', 'success');
+    await state.supabase.auth.signOut();
+    state.appLoaded = false;
+    showLogin();
+  } catch (e) {
+    showToast('Could not delete account: ' + e.message, 'error');
   }
 }
 
@@ -239,15 +342,7 @@ function renderResults(query) {
   state.searchResults.forEach(p => {
     const card = document.createElement('div');
     card.className = 'podcast-card';
-    card.innerHTML = `
-      ${p.subscribed ? '<span class="card-sub-badge">Subscribed</span>' : ''}
-      <img class="card-artwork" src="${esc(p.artwork)}" alt=""
-           loading="lazy" onerror="this.classList.add('broken')" />
-      <div class="card-body">
-        <p class="card-pub">${esc(p.publisher)}</p>
-        <h3 class="card-title">${esc(p.title)}</h3>
-        <p class="card-eps">${p.episode_count ? p.episode_count + ' episodes' : ''}</p>
-      </div>`;
+    card.innerHTML = podcastCardHTML(p);
     card.addEventListener('click', () => selectPodcast(p));
     grid.appendChild(card);
   });
@@ -262,6 +357,106 @@ function clearResults() {
   state.currentPodcast = null;
   state.episodes = [];
   closePanel();
+}
+
+/* ── HOME DISCOVERY (popular shows + sample summary) ──────── */
+function podcastCardHTML(p) {
+  return `
+    ${p.subscribed ? '<span class="card-sub-badge">Subscribed</span>' : ''}
+    <img class="card-artwork" src="${esc(p.artwork)}" alt=""
+         loading="lazy" onerror="this.classList.add('broken')" />
+    <div class="card-body">
+      <p class="card-pub">${esc(p.publisher)}</p>
+      <h3 class="card-title">${esc(p.title)}</h3>
+      <p class="card-eps">${p.episode_count ? p.episode_count + ' episodes' : ''}</p>
+    </div>`;
+}
+
+function loadHomeDiscovery() {
+  loadPopular();
+  loadSample();
+}
+
+async function loadPopular() {
+  const wrap = document.getElementById('homePopular');
+  const grid = document.getElementById('popularGrid');
+  if (!wrap || !grid) return;
+  try {
+    const data = await api('/api/popular');
+    const shows = data.podcasts || [];
+    if (!shows.length) { wrap.classList.add('hidden'); return; }
+    grid.innerHTML = '';
+    shows.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'podcast-card';
+      card.innerHTML = podcastCardHTML(p);
+      card.addEventListener('click', () => selectPodcast(p));
+      grid.appendChild(card);
+    });
+    wrap.classList.remove('hidden');
+  } catch (_) {
+    wrap.classList.add('hidden');
+  }
+}
+
+async function loadSample() {
+  const el = document.getElementById('homeSample');
+  if (!el) return;
+  try {
+    const data = await api('/api/sample-summary');
+    const s = data.sample;
+    if (!s || !s.summary) { el.classList.add('hidden'); return; }
+    const preview = stripTags(s.summary).slice(0, 240);
+    el.innerHTML = `
+      <p class="results-label">See a sample summary</p>
+      <div class="sample-card" id="sampleCard" role="button" tabindex="0">
+        ${s.artwork_url ? `<img class="sample-art" src="${esc(s.artwork_url)}" alt="" onerror="this.style.display='none'"/>` : ''}
+        <div class="sample-body">
+          <p class="sample-podcast">${esc(s.podcast_title)}</p>
+          <p class="sample-title">${esc(s.episode_title)}</p>
+          <p class="sample-preview">${esc(preview)}…</p>
+          <span class="sample-cta">Read the full summary →</span>
+        </div>
+      </div>`;
+    const card = el.querySelector('#sampleCard');
+    const open = () => openSharedEpisode(s.episode_id);
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    el.classList.remove('hidden');
+  } catch (_) {
+    el.classList.add('hidden');
+  }
+}
+
+/* ── PUBLIC READER (signed-out shared ?ep= link) ─────────── */
+async function showPublicSummary(episodeId) {
+  document.getElementById('authOverlay').classList.add('hidden');
+  ['appHeader', 'appHero', 'appMain'].forEach(id => document.getElementById(id).classList.add('hidden'));
+  const view = document.getElementById('publicView');
+  view.classList.remove('hidden');
+  document.getElementById('publicTitle').textContent = 'Loading summary…';
+  document.getElementById('publicPodcast').textContent = '';
+  document.getElementById('publicSource').textContent = '';
+  document.getElementById('publicBody').innerHTML =
+    '<div class="panel-loading"><div class="spinner large"></div><p>Loading summary…</p></div>';
+  try {
+    const data = await api(`/api/public/episodes/${episodeId}/summary`);
+    document.getElementById('publicTitle').textContent = data.episode_title || 'Summary';
+    document.getElementById('publicPodcast').textContent = data.podcast_title || '';
+    document.getElementById('publicBody').innerHTML =
+      window.marked ? marked.parse(data.summary || '') : (data.summary || '');
+    document.getElementById('publicSource').textContent =
+      data.source ? `Transcript source: ${sourceLabel(data.source)}` : '';
+  } catch (e) {
+    document.getElementById('publicTitle').textContent = 'Summary not available';
+    document.getElementById('publicBody').innerHTML =
+      '<p class="no-results">This summary isn’t available yet. Sign in to generate it yourself.</p>';
+  }
+}
+
+function showLoginFromPublic() {
+  document.getElementById('publicView').classList.add('hidden');
+  showLogin();
 }
 
 /* ── PODCAST DETAIL ────────────────────────────────────── */
@@ -346,33 +541,48 @@ async function openEpisodeSummary(index, btn) {
   const ep = state.episodes[index];
   const p = state.currentPodcast;
   openPanel(ep.title, p.title, ep.description);
+  const reqId = ++state.panelReq;
   btn.disabled = true;
   btn.textContent = ep.has_summary ? 'Loading…' : 'Summarizing…';
+
+  const basePayload = {
+    rss_url: p.rss_url,
+    pi_feed_id: p.pi_feed_id || '',
+    podcast_title: p.title,
+    artwork_url: p.artwork || '',
+    publisher: p.publisher || '',
+    categories: p.categories || [],
+    episode_guid: ep.guid,
+    episode_title: ep.title,
+    episode_description: ep.description || '',
+    episode_audio_url: ep.audio_url || '',
+    episode_url: ep.episode_url || '',
+    episode_published_at: ep.published_at || null,
+    episode_duration_seconds: ep.duration_seconds || null,
+    episode_transcript_url: ep.transcript_url || '',
+    episode_transcript_type: ep.transcript_type || '',
+  };
+  state.panelCtx = {
+    level: null,   // set on first response (server picks the user's preference)
+    episodeUrl: ep.episode_url || '',
+    audioUrl: ep.audio_url || '',
+    episodeId: ep.episode_id || null,
+    regenerate: (level) => api('/api/summarize', 'POST', { ...basePayload, detail_level: level }),
+  };
+
   try {
-    const data = await api('/api/summarize', 'POST', {
-      rss_url: p.rss_url,
-      pi_feed_id: p.pi_feed_id || '',
-      podcast_title: p.title,
-      artwork_url: p.artwork || '',
-      publisher: p.publisher || '',
-      categories: p.categories || [],
-      episode_guid: ep.guid,
-      episode_title: ep.title,
-      episode_description: ep.description || '',
-      episode_audio_url: ep.audio_url || '',
-      episode_url: ep.episode_url || '',
-      episode_published_at: ep.published_at || null,
-      episode_duration_seconds: ep.duration_seconds || null,
-      episode_transcript_url: ep.transcript_url || '',
-      episode_transcript_type: ep.transcript_type || '',
-    });
+    const data = await api('/api/summarize', 'POST', basePayload);
+    if (reqId !== state.panelReq) return;   // panel was closed / another episode opened
     state.episodes[index] = { ...ep, has_summary: true, episode_id: data.episode_id };
     state.share.episodeId = data.episode_id;
+    state.panelCtx.episodeId = data.episode_id;
+    state.panelCtx.level = data.detail_level || 'standard';
     const actionEl = document.getElementById(`ep-action-${index}`);
     if (actionEl) actionEl.innerHTML =
       `<button class="btn-view" onclick="openEpisodeSummary(${index}, this)">View Summary</button>`;
     showSummaryInPanel(data.summary, data.source);
   } catch (e) {
+    if (reqId !== state.panelReq) return;
     btn.disabled = false;
     btn.textContent = ep.has_summary ? 'View Summary' : 'Summarize';
     closePanel();
@@ -390,7 +600,13 @@ const LOADING_MSGS = [
 
 function openPanel(epTitle, podcastName, descriptionHtml) {
   state.share = { episodeId: null, title: epTitle, podcast: podcastName, text: '' };
+  state.panelCtx = null;
   closeShareMenu();
+  document.getElementById('panelDetailBar').classList.add('hidden');
+  // History entry so mobile/browser Back closes the panel (popstate handler).
+  if (!document.getElementById('summaryPanel').classList.contains('open')) {
+    try { history.pushState({ panel: true }, ''); } catch (_) {}
+  }
   document.getElementById('panelTitle').textContent = epTitle;
   document.getElementById('panelPodcast').textContent = podcastName;
   const preview = descriptionHtml ? stripTags(descriptionHtml).slice(0, 480) : '';
@@ -418,9 +634,75 @@ function showSummaryInPanel(summary, source) {
   clearInterval(state.loadingTimer);
   state.share.text = summary || '';
   const html = window.marked ? marked.parse(summary || '') : (summary || '');
+  const ctx = state.panelCtx || {};
+  const listenUrl = ctx.episodeUrl || ctx.audioUrl || '';
+  const listen = listenUrl
+    ? `<a class="listen-link" href="${esc(listenUrl)}" target="_blank" rel="noopener">
+         <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+           <path d="M3 8a5 5 0 0 1 10 0M5.5 8a2.5 2.5 0 0 1 5 0M8 8v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+         </svg>
+         Listen to this episode</a>`
+    : '';
   document.getElementById('panelBody').innerHTML = `
     <div class="summary-content">${html}</div>
-    <p class="source-tag">Transcript source: ${esc(sourceLabel(source))}</p>`;
+    <div class="panel-footer">
+      ${listen}
+      <p class="ai-disclaimer">AI-generated summary — may contain errors. Open the episode to verify anything important.</p>
+      <p class="source-tag">Transcript source: ${esc(sourceLabel(source))}</p>
+    </div>`;
+  // Show + sync the detail toggle only when we know how to regenerate.
+  const bar = document.getElementById('panelDetailBar');
+  if (ctx.regenerate) {
+    bar.classList.remove('hidden');
+    syncPanelDetailToggle(ctx.level || 'standard');
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+function syncPanelDetailToggle(level) {
+  document.querySelectorAll('#panelDetailToggle .seg-opt').forEach(b => {
+    const on = b.dataset.level === level;
+    b.classList.toggle('seg-opt-on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+// Re-render the current summary at a different detail level (Quick/Standard/Deep).
+async function setPanelDetail(level) {
+  const ctx = state.panelCtx;
+  if (!ctx || !ctx.regenerate || ctx.level === level) return;
+  syncPanelDetailToggle(level);
+  const reqId = ++state.panelReq;
+  showPanelLoading('');
+  try {
+    const data = await ctx.regenerate(level);
+    if (reqId !== state.panelReq) return;   // a newer request superseded this one
+    ctx.level = level;
+    if (data.episode_id) { state.share.episodeId = data.episode_id; ctx.episodeId = data.episode_id; }
+    showSummaryInPanel(data.summary, data.source);
+  } catch (e) {
+    if (reqId !== state.panelReq) return;
+    showToast(e.message || 'Could not change detail level', 'error');
+    syncPanelDetailToggle(ctx.level || 'standard');
+  }
+}
+
+// Render just the loading state in an already-open panel (used by the detail toggle).
+function showPanelLoading() {
+  let i = 0;
+  document.getElementById('panelBody').innerHTML = `
+    <div class="panel-loading">
+      <div class="spinner large"></div>
+      <p id="loadingMsg">${LOADING_MSGS[0]}</p>
+      <p class="loading-hint">Re-generating at the new detail level — this can take a minute for long episodes.</p>
+    </div>`;
+  clearInterval(state.loadingTimer);
+  state.loadingTimer = setInterval(() => {
+    i = (i + 1) % LOADING_MSGS.length;
+    const el = document.getElementById('loadingMsg');
+    if (el) el.textContent = LOADING_MSGS[i];
+  }, 3500);
 }
 
 /* ── SHARE ─────────────────────────────────────────────── */
@@ -474,24 +756,42 @@ function shareEmail() {
 // Open a summary from a ?ep= share link (uses the cached-summary endpoint).
 async function openSharedEpisode(episodeId) {
   openPanel('Loading summary…', '');
+  const reqId = ++state.panelReq;
+  state.panelCtx = {
+    level: null, episodeId, episodeUrl: '', audioUrl: '',
+    regenerate: (level) => api(`/api/episodes/${episodeId}/summarize?detail_level=${level}`, 'POST'),
+  };
   try {
     const data = await api(`/api/episodes/${episodeId}/summarize`, 'POST');
+    if (reqId !== state.panelReq) return;
     document.getElementById('panelTitle').textContent = data.episode_title || 'Summary';
     document.getElementById('panelPodcast').textContent = data.podcast_title || '';
     state.share.episodeId = episodeId;
     state.share.title = data.episode_title || 'Summary';
     state.share.podcast = data.podcast_title || '';
+    state.panelCtx.level = data.detail_level || 'standard';
+    state.panelCtx.episodeUrl = data.episode_url || '';
+    state.panelCtx.audioUrl = data.audio_url || '';
     showSummaryInPanel(data.summary, data.source);
   } catch (e) {
+    if (reqId !== state.panelReq) return;
     closePanel();
     showToast(e.message || 'Could not open that summary.', 'error');
   }
 }
 
-function closePanel() {
+function closePanel(fromPop = false) {
   clearInterval(state.loadingTimer);
+  state.panelReq++;   // invalidate any in-flight summary/detail request
+  const wasOpen = document.getElementById('summaryPanel').classList.contains('open');
   document.getElementById('summaryPanel').classList.remove('open');
   document.getElementById('panelBackdrop').classList.add('hidden');
+  document.getElementById('panelDetailBar').classList.add('hidden');
+  state.panelCtx = null;
+  // Closing via the UI consumes the history entry openPanel pushed.
+  if (!fromPop && wasOpen && history.state && history.state.panel) {
+    try { history.back(); } catch (_) {}
+  }
 }
 
 /* ── SUBSCRIBE ─────────────────────────────────────────── */
@@ -537,11 +837,28 @@ async function toggleSubscribe() {
       });
       await loadSubscriptions();
       updateSubscribeBtn(true);
-      showToast(`Subscribed to ${p.title}`, 'success');
+      showToast(`Subscribed — summarizing the latest episode for My Summaries…`, 'success');
+      const pid = subPodcastId(p);
+      if (pid) seedLatestForPodcast(pid);   // background: don't block the button
     } catch (e) {
       showToast('Failed to subscribe: ' + e.message, 'error');
       updateSubscribeBtn(false);
     }
+  }
+}
+
+// After subscribing, summarize the show's latest episode so My Summaries isn't empty
+// until a brand-new episode airs. Runs in the background; surfaces a toast on success.
+async function seedLatestForPodcast(podcastId) {
+  try {
+    const data = await api(`/api/subscriptions/${podcastId}/seed-latest`, 'POST');
+    if (data && data.seeded) {
+      showToast('Latest episode summarized — see My Summaries', 'success');
+      // Refresh the inbox if the user is looking at it.
+      if (!document.getElementById('inboxView').classList.contains('hidden')) showInbox();
+    }
+  } catch (_) {
+    // Non-critical: the next scan will still deliver new episodes.
   }
 }
 
@@ -567,8 +884,6 @@ function toggleSubsTray() {
     backdrop.classList.remove('hidden');
     loadSubscriptions();
     loadStatus();
-    loadPeople();
-    loadTopics();
   } else {
     tray.classList.remove('open');
     backdrop.classList.add('hidden');
@@ -686,16 +1001,36 @@ function openDeliverySummary(i) {
   const d = state.deliveries[i];
   openPanel(d.episode_title, d.podcast_title);
   state.share.episodeId = d.episode_id;
+  state.panelCtx = {
+    level: currentDetailPref(), episodeId: d.episode_id,
+    episodeUrl: d.episode_url || '', audioUrl: d.audio_url || '',
+    regenerate: (level) => api(`/api/episodes/${d.episode_id}/summarize?detail_level=${level}`, 'POST'),
+  };
   showSummaryInPanel(d.summary_md || '_Summary not available yet._', d.transcript_source);
 }
 
-/* ── DISCOVER (recommendations) ────────────────────────── */
+/* ── FOR YOU (discovery hub: follow people/topics + recommendations) ── */
 async function showDiscover() {
   document.getElementById('searchResults').classList.add('hidden');
   document.getElementById('podcastDetail').classList.add('hidden');
   document.getElementById('emptyState').classList.add('hidden');
   document.getElementById('inboxView').classList.add('hidden');
   document.getElementById('discoverView').classList.remove('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  // The follow controls live here now. Load them first so the recommendations'
+  // empty-state copy knows whether the user already follows anything.
+  document.getElementById('discoverList').innerHTML = skeletons(4);
+  await Promise.all([loadPeople(), loadTopics()]);
+  loadRecommendations();
+}
+
+// From the Subscriptions tray pointer: close the tray, open For You.
+function openDiscoverFromTray() {
+  if (state.trayOpen) toggleSubsTray();
+  showDiscover();
+}
+
+async function loadRecommendations() {
   document.getElementById('discoverList').innerHTML = skeletons(4);
   try {
     const data = await api('/api/recommendations');
@@ -706,11 +1041,18 @@ async function showDiscover() {
   }
 }
 
+// Refresh the recommendation list if For You is the visible view (after a follow/unfollow).
+function refreshDiscoverRecs() {
+  if (!document.getElementById('discoverView').classList.contains('hidden')) loadRecommendations();
+}
+
 function renderDiscover() {
   const list = document.getElementById('discoverList');
   list.innerHTML = '';
   if (!state.recommendations.length) {
-    list.innerHTML = '<p class="no-results">No recommendations yet. Follow some people or topics, then check back as new episodes are scanned.</p>';
+    list.innerHTML = (state.people.length || state.topics.length)
+      ? '<p class="no-results">Nothing yet — we\'ll add episodes here as new shows are scanned for the guests and topics you follow.</p>'
+      : '<p class="no-results">Follow a guest or topic above and episodes featuring them will appear here.</p>';
     return;
   }
   state.recommendations.forEach((r, i) => {
@@ -733,14 +1075,31 @@ function renderDiscover() {
   });
 }
 
+// Best guess at the user's current detail preference, for the panel toggle highlight.
+function currentDetailPref() {
+  const sel = document.getElementById('summaryDetail');
+  return (sel && sel.value) || 'standard';
+}
+
 async function openRecSummary(i) {
   const r = state.recommendations[i];
   openPanel(r.episode_title, r.podcast_title);
+  const reqId = ++state.panelReq;
   state.share.episodeId = r.episode_id;
+  state.panelCtx = {
+    level: currentDetailPref(), episodeId: r.episode_id,
+    episodeUrl: r.episode_url || '', audioUrl: r.audio_url || '',
+    regenerate: (level) => api(`/api/episodes/${r.episode_id}/summarize?detail_level=${level}`, 'POST'),
+  };
   try {
     const data = await api(`/api/episodes/${r.episode_id}/summarize`, 'POST');
+    if (reqId !== state.panelReq) return;
+    state.panelCtx.level = data.detail_level || state.panelCtx.level;
+    state.panelCtx.episodeUrl = data.episode_url || state.panelCtx.episodeUrl;
+    state.panelCtx.audioUrl = data.audio_url || state.panelCtx.audioUrl;
     showSummaryInPanel(data.summary, data.source);
   } catch (e) {
+    if (reqId !== state.panelReq) return;
     closePanel();
     showToast(e.message || 'Failed to generate summary', 'error');
   }
@@ -783,15 +1142,15 @@ function renderPeople() {
   const list = document.getElementById('peopleList');
   if (!list) return;
   if (!state.people.length) {
-    list.innerHTML = '<p class="no-subs">No one yet. Add a person above.</p>';
+    list.innerHTML = '<span class="chip-empty">No guests yet — add one above.</span>';
     return;
   }
   list.innerHTML = '';
   state.people.forEach(p => {
-    const el = document.createElement('div');
-    el.className = 'person-item';
-    el.innerHTML = `<span class="person-name">${esc(p.name)}</span>
-      <button class="person-remove" onclick="removePerson(${p.person_id})">Remove</button>`;
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.innerHTML = `${esc(p.name)}
+      <button class="chip-x" aria-label="Stop following ${esc(p.name)}" onclick="removePerson(${p.person_id})">×</button>`;
     list.appendChild(el);
   });
 }
@@ -802,10 +1161,17 @@ async function addPerson(event) {
   const name = input.value.trim();
   if (name.length < 2) return false;
   try {
-    await api('/api/people', 'POST', { name });
+    const res = await api('/api/people', 'POST', { name });
     input.value = '';
     await loadPeople();
-    showToast(`Now following ${name}`, 'success');
+    refreshDiscoverRecs();
+    const n = (res && res.recent_matches) || 0;
+    showToast(
+      n > 0
+        ? `Now following ${name} — ${n} recent episode${n === 1 ? '' : 's'} in For You`
+        : `Now following ${name} — we'll alert you when they appear on your shows or popular podcasts`,
+      'success'
+    );
   } catch (e) {
     showToast('Failed to add: ' + e.message, 'error');
   }
@@ -816,6 +1182,7 @@ async function removePerson(personId) {
   try {
     await api(`/api/people?person_id=${personId}`, 'DELETE');
     await loadPeople();
+    refreshDiscoverRecs();
   } catch (e) {
     showToast('Failed to remove: ' + e.message, 'error');
   }
@@ -834,15 +1201,15 @@ function renderTopics() {
   const list = document.getElementById('topicsList');
   if (!list) return;
   if (!state.topics.length) {
-    list.innerHTML = '<p class="no-subs">No topics yet. Add one above.</p>';
+    list.innerHTML = '<span class="chip-empty">No topics yet — add one above.</span>';
     return;
   }
   list.innerHTML = '';
   state.topics.forEach(t => {
-    const el = document.createElement('div');
-    el.className = 'person-item';
-    el.innerHTML = `<span class="person-name">${esc(t.topic)}</span>
-      <button class="person-remove" onclick="removeTopic(${t.id})">Remove</button>`;
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.innerHTML = `${esc(t.topic)}
+      <button class="chip-x" aria-label="Stop following ${esc(t.topic)}" onclick="removeTopic(${t.id})">×</button>`;
     list.appendChild(el);
   });
 }
@@ -853,10 +1220,17 @@ async function addTopic(event) {
   const topic = input.value.trim();
   if (topic.length < 2) return false;
   try {
-    await api('/api/topics', 'POST', { topic });
+    const res = await api('/api/topics', 'POST', { topic });
     input.value = '';
     await loadTopics();
-    showToast(`Now following "${topic}"`, 'success');
+    refreshDiscoverRecs();
+    const n = (res && res.recent_matches) || 0;
+    showToast(
+      n > 0
+        ? `Now following "${topic}" — ${n} recent episode${n === 1 ? '' : 's'} in For You`
+        : `Now following "${topic}" — we'll alert you when an episode covers it`,
+      'success'
+    );
   } catch (e) {
     showToast('Failed to add: ' + e.message, 'error');
   }
@@ -867,6 +1241,7 @@ async function removeTopic(topicId) {
   try {
     await api(`/api/topics?topic_id=${topicId}`, 'DELETE');
     await loadTopics();
+    refreshDiscoverRecs();
   } catch (e) {
     showToast('Failed to remove: ' + e.message, 'error');
   }

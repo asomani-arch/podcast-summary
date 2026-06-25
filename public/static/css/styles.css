@@ -1,26 +1,52 @@
 :root {
-  --bg: #080808;
-  --surface: #111111;
-  --surface-2: #191919;
-  --surface-3: #222222;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-bright: rgba(255, 255, 255, 0.13);
-  --text: #efefef;
-  --text-2: #999999;
-  --text-3: #555555;
+  /* Surfaces — lifted off pure black so cards read as real, edged objects. */
+  --bg: #0a0a0c;
+  --surface: #151518;
+  --surface-2: #1d1d21;
+  --surface-3: #27272c;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-bright: rgba(255, 255, 255, 0.18);
+
+  /* Text — contrast floor raised: --text-3 was #555 (~2.6:1, failed AA). */
+  --text: #f1f1f1;
+  --text-2: #a4a4ab;
+  --text-3: #7c7c84;
+  --text-read: #d2d2d8;   /* long-form body copy: comfortable, low-glare reading tone */
+
+  /* Brand accent — reserved for primary actions + personalization signals only. */
   --accent: #f59e0b;
   --accent-hover: #d97706;
   --accent-dim: rgba(245, 158, 11, 0.12);
-  --accent-dim-bright: rgba(245, 158, 11, 0.22);
+  --accent-dim-bright: rgba(245, 158, 11, 0.24);
   --danger: #ef4444;
   --success: #22c55e;
-  --radius: 14px;
+
+  /* Radius — two steps (+ pills): 12 for surfaces, 8 for controls. */
+  --radius: 12px;
   --radius-sm: 8px;
-  --radius-xs: 5px;
+  --radius-xs: 8px;
+
+  /* Type ramp — one deliberate set of steps instead of ~12 near-identical sizes. */
+  --fs-label: 0.75rem;   /* uppercase section eyebrows + meta */
+  --fs-sm: 0.875rem;
+  --fs-base: 1rem;
+  --fs-lg: 1.25rem;
+  --fs-xl: 1.75rem;
+  --fs-2xl: 2.5rem;
+
+  /* Spacing — 8px base with a 4px half-step. */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+
   --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-display: 'Playfair Display', Georgia, serif;
   --header-h: 64px;
-  --panel-w: 520px;
+  --panel-w: 540px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -49,7 +75,7 @@ body.panel-open {
   top: 0;
   z-index: 50;
   height: var(--header-h);
-  background: rgba(8, 8, 8, 0.85);
+  background: rgba(10, 10, 12, 0.85);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
@@ -143,7 +169,7 @@ body.panel-open {
 }
 
 .hero-label {
-  font-size: 0.8rem;
+  font-size: var(--fs-label);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -252,34 +278,103 @@ body.panel-open {
 .empty-state {
   display: flex;
   flex-direction: column;
+  gap: 2.5rem;
+  padding: 2rem 0 4rem;
+}
+
+.empty-hint {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 1.25rem;
-  padding: 5rem 2rem;
+  padding: 3rem 2rem;
   text-align: center;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 .empty-icon {
-  width: 80px;
-  height: 80px;
+  width: 72px;
+  height: 72px;
   color: var(--text-3);
 }
 
-.empty-state p {
+.empty-hint p {
   font-size: 1rem;
   line-height: 1.6;
 }
+
+/* ── HOME DISCOVERY (sample + popular) ───────────────────── */
+
+.home-sample, .home-popular { width: 100%; }
+
+.sample-card {
+  display: flex;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+
+.sample-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.sample-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.sample-art {
+  width: 88px;
+  height: 88px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--surface-3);
+}
+
+.sample-body { flex: 1; min-width: 0; }
+
+.sample-podcast {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 0.25rem;
+}
+
+.sample-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  margin-bottom: 0.4rem;
+}
+
+.sample-preview {
+  font-size: 0.875rem;
+  color: var(--text-2);
+  line-height: 1.55;
+  margin-bottom: 0.6rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sample-cta { font-size: 0.85rem; font-weight: 600; color: var(--accent); }
 
 /* ── SEARCH RESULTS ──────────────────────────────────── */
 
 .results-section { padding-top: 0.5rem; }
 
 .results-label {
-  font-size: 0.8rem;
+  font-size: var(--fs-label);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--text-3);
+  color: var(--text-2);
   margin-bottom: 1.25rem;
 }
 
@@ -292,7 +387,7 @@ body.panel-open {
 .no-results {
   grid-column: 1 / -1;
   text-align: center;
-  color: var(--text-3);
+  color: var(--text-2);
   padding: 3rem;
   font-size: 0.95rem;
 }
@@ -330,11 +425,9 @@ body.panel-open {
 }
 
 .card-pub {
-  font-size: 0.75rem;
+  font-size: var(--fs-label);
   font-weight: 500;
   color: var(--text-3);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   margin-bottom: 0.3rem;
   white-space: nowrap;
   overflow: hidden;
@@ -434,11 +527,9 @@ body.panel-open {
 }
 
 .detail-publisher {
-  font-size: 0.78rem;
+  font-size: var(--fs-label);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--accent);
+  color: var(--text-2);
   margin-bottom: 0.4rem;
 }
 
@@ -470,11 +561,11 @@ body.panel-open {
 .episodes-wrap { }
 
 .section-label {
-  font-size: 0.75rem;
+  font-size: var(--fs-label);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--text-3);
+  color: var(--text-2);
   margin-bottom: 0.75rem;
 }
 
@@ -520,9 +611,10 @@ body.panel-open {
   color: var(--text);
   line-height: 1.4;
   margin-bottom: 0.2rem;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .ep-meta {
@@ -696,11 +788,9 @@ button { cursor: pointer; font-family: var(--font); }
 .panel-head-titles { flex: 1; min-width: 0; }
 
 .panel-podcast-name {
-  font-size: 0.75rem;
+  font-size: var(--fs-label);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--accent);
+  color: var(--text-2);
   margin-bottom: 0.3rem;
 }
 
@@ -750,8 +840,8 @@ button { cursor: pointer; font-family: var(--font); }
 /* ── SUMMARY CONTENT (markdown) ──────────────────────── */
 
 .summary-content {
-  font-size: 0.925rem;
-  line-height: 1.7;
+  font-size: 0.975rem;
+  line-height: 1.75;
   color: var(--text);
 }
 
@@ -777,7 +867,7 @@ button { cursor: pointer; font-family: var(--font); }
 
 .summary-content p {
   margin-bottom: 0.75rem;
-  color: var(--text-2);
+  color: var(--text-read);
 }
 
 .summary-content ul, .summary-content ol {
@@ -786,12 +876,12 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 .summary-content li {
-  color: var(--text-2);
+  color: var(--text-read);
   margin-bottom: 0.4rem;
   line-height: 1.6;
 }
 
-.summary-content li::marker { color: var(--accent); }
+.summary-content li::marker { color: var(--text-3); }
 
 .summary-content strong {
   color: var(--text);
@@ -858,7 +948,7 @@ button { cursor: pointer; font-family: var(--font); }
 
 .no-subs {
   text-align: center;
-  color: var(--text-3);
+  color: var(--text-2);
   font-size: 0.875rem;
   padding: 3rem 1rem;
   line-height: 1.6;
@@ -1141,6 +1231,296 @@ button { cursor: pointer; font-family: var(--font); }
 .toast.success { border-color: rgba(34, 197, 94, 0.4); color: var(--success); }
 .toast.error   { border-color: rgba(239, 68, 68, 0.4); color: var(--danger); }
 
+/* ── FOR YOU (discovery hub) ─────────────────────────── */
+
+.discover-intro {
+  font-size: 0.92rem;
+  color: var(--text-2);
+  line-height: 1.55;
+  margin: 0 0 1.5rem;
+  max-width: 640px;
+}
+
+.follow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2.5rem;
+}
+
+.follow-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+
+.follow-card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.85rem;
+}
+
+.follow-add {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.follow-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.9rem;
+}
+
+.follow-add input::placeholder { color: var(--text-3); }
+.follow-add input:focus { outline: none; border-color: var(--accent); }
+
+.follow-add button {
+  padding: 0.7rem 1.1rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.follow-add button:hover { background: var(--accent-hover); }
+
+.chip-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-dim-bright);
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.75rem;
+  border-radius: 999px;
+}
+
+.chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.chip-x:hover { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+
+.chip-empty { font-size: 0.85rem; color: var(--text-3); }
+
+.discover-recs-label { margin-top: 0.5rem; }
+
+/* Home entry-point into the discovery hub */
+.discover-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  width: 100%;
+  text-align: left;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-dim-bright);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+
+.discover-banner:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.discover-banner-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.discover-banner-sub {
+  font-size: 0.9rem;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.discover-banner-cta {
+  flex-shrink: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* ── PANEL DETAIL BAR + FOOTER ───────────────────────── */
+
+.panel-detail-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.panel-detail-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+
+.panel-detail-bar .seg-group { flex: 1; }
+.panel-detail-bar .seg-opt { border: none; }
+
+.panel-footer {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.listen-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 999px;
+  transition: background 0.15s;
+}
+
+.listen-link:hover { background: var(--accent-dim); }
+.listen-link svg { width: 15px; height: 15px; }
+
+.ai-disclaimer {
+  font-size: 0.75rem;
+  color: var(--text-3);
+  line-height: 1.5;
+  margin-top: 1rem;
+}
+
+/* ── INLINE / AUTH HELPERS ───────────────────────────── */
+
+.inline-link {
+  display: inline;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+}
+.inline-link:hover { color: var(--accent-hover); }
+
+.auth-resend { margin-top: 0.5rem; text-decoration: underline; }
+
+/* ── SETTINGS PANEL ──────────────────────────────────── */
+
+.settings-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 2rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+
+.settings-account-email {
+  font-size: 0.9rem;
+  color: var(--text);
+  word-break: break-all;
+  margin-bottom: 0.5rem;
+}
+
+.settings-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border-bright);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.9rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.5rem;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.settings-btn:hover { background: var(--surface-3); }
+
+.settings-btn.danger { color: var(--danger); border-color: rgba(239, 68, 68, 0.25); }
+.settings-btn.danger:hover { background: rgba(239, 68, 68, 0.1); }
+
+/* ── PUBLIC READER (signed-out shared link) ──────────── */
+
+.public-view {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.public-main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 5rem;
+}
+
+.public-card { width: 100%; }
+
+.public-ep-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--text);
+  margin: 0.4rem 0 1.5rem;
+}
+
+.public-cta {
+  margin-top: 2.5rem;
+  padding: 1.5rem;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+}
+
+.public-cta-text {
+  font-size: 1rem;
+  color: var(--text);
+  margin-bottom: 1rem;
+}
+
 /* ── UTILITIES ───────────────────────────────────────── */
 
 .hidden { display: none !important; }
@@ -1160,4 +1540,5 @@ button { cursor: pointer; font-family: var(--font); }
   .episode-row { gap: 0.75rem; padding: 0.85rem 1rem; }
   .ep-title { font-size: 0.85rem; }
   .summary-panel, .subs-tray { width: 100vw; }
+  .discover-banner { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
 }

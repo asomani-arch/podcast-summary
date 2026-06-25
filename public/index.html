@@ -145,6 +145,7 @@
         <button type="submit" id="authBtn">Send sign-in link</button>
       </form>
       <p class="auth-msg" id="authMsg"></p>
+      <button type="button" class="btn-link auth-resend hidden" id="authResend" onclick="resendMagicLink()">Didn't get it? Resend link</button>
       <p class="auth-fineprint">We'll only use your email to send podcast summaries and your sign-in link. We never sell your data or send spam, and you can unsubscribe anytime.</p>
     </div>
     <footer class="auth-footer">© 2026 Ashutosh Somani</footer>
@@ -172,6 +173,7 @@
             <button class="profile-item" role="menuitem" onclick="profileGo(toggleSubsTray)">
               My Subscriptions <span class="badge" id="subCount">0</span>
             </button>
+            <button class="profile-item" role="menuitem" onclick="profileGo(toggleSettings)">Settings</button>
             <button class="profile-item danger" role="menuitem" onclick="signOut()">Sign Out</button>
           </div>
         </div>
@@ -205,14 +207,34 @@
   <main class="main hidden" id="appMain">
 
     <div class="empty-state" id="emptyState">
-      <svg class="empty-icon" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="40" cy="40" r="28" stroke="currentColor" stroke-width="1.2" opacity="0.2"/>
-        <circle cx="40" cy="40" r="16" stroke="currentColor" stroke-width="1.5" opacity="0.35"/>
-        <circle cx="40" cy="40" r="5" fill="currentColor" opacity="0.6"/>
-        <path d="M40 4C20.1 4 4 20.1 4 40" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.15"/>
-        <path d="M76 40C76 59.9 59.9 76 40 76" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.15"/>
-      </svg>
-      <p>Search for a podcast above to browse episodes<br>and get AI-generated summaries.</p>
+      <!-- Front-and-center entry into the discovery hub (For You). -->
+      <button class="discover-banner" onclick="showDiscover()">
+        <div class="discover-banner-text">
+          <p class="discover-banner-title">Follow people &amp; topics you care about</p>
+          <p class="discover-banner-sub">Get a summary whenever your favourite guests or subjects show up — on any podcast we watch, not just the ones you subscribe to.</p>
+        </div>
+        <span class="discover-banner-cta">Set up For You →</span>
+      </button>
+
+      <!-- Sample summary teaser — shows a new user what they'll get before they do anything. -->
+      <div class="home-sample hidden" id="homeSample"></div>
+
+      <!-- Popular shows to browse, so the first screen isn't a dead end. -->
+      <div class="home-popular hidden" id="homePopular">
+        <p class="results-label">Popular right now</p>
+        <div class="results-grid" id="popularGrid"></div>
+      </div>
+
+      <div class="empty-hint" id="emptyHint">
+        <svg class="empty-icon" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="40" cy="40" r="28" stroke="currentColor" stroke-width="1.2" opacity="0.2"/>
+          <circle cx="40" cy="40" r="16" stroke="currentColor" stroke-width="1.5" opacity="0.35"/>
+          <circle cx="40" cy="40" r="5" fill="currentColor" opacity="0.6"/>
+          <path d="M40 4C20.1 4 4 20.1 4 40" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.15"/>
+          <path d="M76 40C76 59.9 59.9 76 40 76" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.15"/>
+        </svg>
+        <p>Search for any podcast above to browse episodes<br>and get AI-generated summaries.</p>
+      </div>
     </div>
 
     <div class="results-section hidden" id="searchResults">
@@ -259,8 +281,30 @@
     </div>
 
     <div class="inbox-view hidden" id="discoverView">
-      <p class="section-label">Recommended for you</p>
-      <p class="tray-section-hint">Episodes featuring people and topics you follow.</p>
+      <p class="section-label">For You</p>
+      <p class="discover-intro">Follow the people and topics you care about. We'll summarize new episodes
+         that feature them — across every show we watch — and gather them right here.</p>
+
+      <div class="follow-grid">
+        <div class="follow-card">
+          <p class="follow-card-title">👤 Guests you follow</p>
+          <form class="follow-add" onsubmit="return addPerson(event)">
+            <input type="text" id="personInput" placeholder="Add a guest — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
+            <button type="submit">Add</button>
+          </form>
+          <div class="chip-list" id="peopleList"></div>
+        </div>
+        <div class="follow-card">
+          <p class="follow-card-title">🏷️ Topics you follow</p>
+          <form class="follow-add" onsubmit="return addTopic(event)">
+            <input type="text" id="topicInput" placeholder="Add a topic — e.g. AI infrastructure" autocomplete="off" spellcheck="false" />
+            <button type="submit">Add</button>
+          </form>
+          <div class="chip-list" id="topicsList"></div>
+        </div>
+      </div>
+
+      <p class="section-label discover-recs-label">Episodes for you</p>
       <div class="inbox-list" id="discoverList"></div>
     </div>
 
@@ -290,11 +334,19 @@
             <button class="share-item" role="menuitem" onclick="shareEmail()">Email</button>
           </div>
         </div>
-        <button class="btn-icon" onclick="closePanel()" aria-label="Close">
+        <button class="btn-icon" id="panelClose" onclick="closePanel()" aria-label="Close">
           <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M3 3l10 10M13 3 3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
           </svg>
         </button>
+      </div>
+    </div>
+    <div class="panel-detail-bar hidden" id="panelDetailBar">
+      <span class="panel-detail-label">Detail</span>
+      <div class="seg-group" id="panelDetailToggle" role="group" aria-label="Summary detail level">
+        <button class="seg-opt" data-level="quick" onclick="setPanelDetail('quick')">Quick</button>
+        <button class="seg-opt" data-level="standard" onclick="setPanelDetail('standard')">Standard</button>
+        <button class="seg-opt" data-level="deep" onclick="setPanelDetail('deep')">Deep</button>
       </div>
     </div>
     <div class="panel-body" id="panelBody"></div>
@@ -311,45 +363,87 @@
         </svg>
       </button>
     </div>
-    <div class="tray-default">
-      <span>New-episode emails</span>
-      <select class="cadence-select" id="defaultCadence" onchange="saveDefaultCadence()">
-        <option value="instant">Instant</option>
-        <option value="daily">Daily digest</option>
-        <option value="weekly">Weekly digest</option>
-      </select>
-    </div>
-    <div class="tray-default">
-      <span>Summary detail</span>
-      <select class="cadence-select" id="summaryDetail" onchange="saveSummaryDetail()">
-        <option value="quick">Quick</option>
-        <option value="standard">Standard</option>
-        <option value="deep">Deep</option>
-      </select>
-    </div>
-    <p class="tray-section-hint">Quick = headlines only · Standard = full brief · Deep = exhaustive.
-       Applies to new summaries you open and the ones delivered to you.</p>
+    <p class="tray-section-hint" style="padding-top:4px">Delivery cadence and summary detail now live in
+       <button class="btn-link inline-link" onclick="openSettingsFromTray()">Settings</button>.</p>
     <div class="tray-status" id="trayStatus"></div>
 
     <div class="tray-section-label">Podcasts you follow</div>
     <p class="tray-section-hint">New episodes of these shows are summarized and delivered automatically.</p>
     <div class="subs-list" id="subsList"></div>
 
-    <div class="tray-section-label">Guests you follow</div>
-    <p class="tray-section-hint">Get a summary whenever they appear on a show you follow or a popular podcast.</p>
-    <form class="people-add" onsubmit="return addPerson(event)">
-      <input type="text" id="personInput" placeholder="Add a guest — e.g. Elon Musk" autocomplete="off" spellcheck="false" />
-      <button type="submit">Add</button>
-    </form>
-    <div class="people-list" id="peopleList"></div>
+    <p class="tray-section-hint" style="margin-top:18px">Want summaries of specific guests or topics across
+       <em>any</em> show? Follow them in
+       <button class="btn-link inline-link" onclick="openDiscoverFromTray()">For You</button>.</p>
+  </div>
 
-    <div class="tray-section-label">Topics you follow</div>
-    <p class="tray-section-hint">Get a summary when an episode substantially covers a topic.</p>
-    <form class="people-add" onsubmit="return addTopic(event)">
-      <input type="text" id="topicInput" placeholder="Add a topic — e.g. AI infrastructure" autocomplete="off" spellcheck="false" />
-      <button type="submit">Add</button>
-    </form>
-    <div class="people-list" id="topicsList"></div>
+  <!-- Settings Panel -->
+  <div class="panel-backdrop hidden" id="settingsBackdrop" onclick="toggleSettings()"></div>
+  <div class="subs-tray" id="settingsPanel">
+    <div class="tray-head">
+      <h3 class="tray-title">Settings</h3>
+      <button class="btn-icon" onclick="toggleSettings()" aria-label="Close">
+        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 3l10 10M13 3 3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="settings-scroll">
+      <div class="tray-section-label">Account</div>
+      <p class="settings-account-email" id="settingsEmail"></p>
+
+      <div class="tray-section-label">Delivery</div>
+      <div class="tray-default">
+        <span>New-episode emails</span>
+        <select class="cadence-select" id="defaultCadence" onchange="saveDefaultCadence()">
+          <option value="instant">Instant</option>
+          <option value="daily">Daily digest</option>
+          <option value="weekly">Weekly digest</option>
+        </select>
+      </div>
+      <div class="tray-default">
+        <span>Summary detail</span>
+        <select class="cadence-select" id="summaryDetail" onchange="saveSummaryDetail()">
+          <option value="quick">Quick</option>
+          <option value="standard">Standard</option>
+          <option value="deep">Deep</option>
+        </select>
+      </div>
+      <p class="tray-section-hint">Quick = headlines only · Standard = full brief · Deep = exhaustive.
+         Applies to new summaries you open and the ones delivered to you.</p>
+
+      <div class="tray-section-label">Your data</div>
+      <button class="settings-btn" onclick="exportData()">Download my data</button>
+      <button class="settings-btn danger" onclick="deleteAccount()">Delete my account</button>
+      <p class="tray-section-hint">Deleting removes your account and all your data permanently. This can't be undone.</p>
+    </div>
+  </div>
+
+  <!-- Public (signed-out) summary reader — opened from a shared ?ep= link -->
+  <div class="public-view hidden" id="publicView">
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="logo" href="/" aria-label="PodcastAI home">
+          <svg class="logo-wave" viewBox="0 0 36 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M2 10 Q6 2 10 10 Q14 18 18 10 Q22 2 26 10 Q30 18 34 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="logo-text">Podcast<span class="accent">AI</span></span>
+        </a>
+        <button class="btn-subscribe" onclick="showLoginFromPublic()">Sign in</button>
+      </div>
+    </header>
+    <main class="public-main">
+      <div class="public-card">
+        <p class="panel-podcast-name" id="publicPodcast"></p>
+        <h1 class="public-ep-title" id="publicTitle"></h1>
+        <div class="summary-content" id="publicBody"></div>
+        <p class="source-tag" id="publicSource"></p>
+        <div class="public-cta">
+          <p class="public-cta-text">Get AI summaries of any podcast — sent straight to your inbox.</p>
+          <button class="btn-subscribe" onclick="showLoginFromPublic()">Try PodcastAI free</button>
+        </div>
+        <p class="ai-disclaimer">AI-generated summary — may contain errors. Check the episode for anything important.</p>
+      </div>
+    </main>
   </div>
 
   <!-- Toast -->

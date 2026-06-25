@@ -448,6 +448,7 @@ def list_deliveries(user_id: str, limit: int = 50) -> list[dict]:
             """
             SELECT d.id, d.episode_id, d.reasons, d.status, d.created_at,
                    e.title AS episode_title, e.published_at, e.duration_seconds,
+                   e.episode_url, e.audio_url,
                    p.title AS podcast_title, p.artwork_url,
                    es.summary_md, es.transcript_source
             FROM deliveries d
@@ -701,6 +702,8 @@ def _rec_base(r: dict) -> dict:
         "duration_seconds": r.get("duration_seconds"),
         "podcast_title":    r.get("podcast_title"),
         "artwork_url":      r.get("artwork_url"),
+        "episode_url":      r.get("episode_url"),
+        "audio_url":        r.get("audio_url"),
         "reasons":          [],
     }
 
@@ -725,6 +728,7 @@ def recommend_episodes(user_id: str, limit: int = 20) -> list[dict]:
             cur.execute(
                 """
                 SELECT e.id, e.title, e.published_at, e.duration_seconds,
+                       e.episode_url, e.audio_url,
                        p.title AS podcast_title, p.artwork_url, ep.person_id
                 FROM episode_people ep
                 JOIN episodes e ON e.id = ep.episode_id
@@ -745,6 +749,7 @@ def recommend_episodes(user_id: str, limit: int = 20) -> list[dict]:
             cur.execute(
                 """
                 SELECT e.id, e.title, e.published_at, e.duration_seconds,
+                       e.episode_url, e.audio_url,
                        p.title AS podcast_title, p.artwork_url
                 FROM episode_topics et
                 JOIN episodes e ON e.id = et.episode_id
@@ -777,3 +782,123 @@ def get_episode_full(episode_id: int) -> dict | None:
             (episode_id,),
         )
         return cur.fetchone()
+
+
+# ── Discovery surfaces (popular shows, sample + public summaries) ───────────────
+
+def list_popular_podcasts(limit: int = 24) -> list[dict]:
+    """The curated popular shows, shaped like search results so the frontend can
+    render them as browsable cards on the empty home (warms the cold start)."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, rss_url, pi_feed_id, itunes_id, title, publisher,
+                   artwork_url, description, categories
+            FROM podcasts
+            WHERE is_popular = TRUE AND rss_url IS NOT NULL
+            ORDER BY title ASC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        out = []
+        for r in cur.fetchall():
+            out.append({
+                "pi_feed_id":    r.get("pi_feed_id"),
+                "itunes_id":     r.get("itunes_id"),
+                "title":         r.get("title") or "",
+                "publisher":     r.get("publisher") or "",
+                "artwork":       r.get("artwork_url") or "",
+                "rss_url":       r.get("rss_url") or "",
+                "episode_count": 0,
+                "description":   r.get("description") or "",
+                "categories":    r.get("categories") or [],
+            })
+        return out
+
+
+def latest_public_summary() -> dict | None:
+    """The most recently generated standard-detail summary, with episode + show
+    metadata — used to show a new user one real sample summary."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT es.episode_id, es.summary_md, es.transcript_source, es.detail_level,
+                   e.title AS episode_title, e.episode_url, e.audio_url,
+                   p.title AS podcast_title, p.artwork_url
+            FROM episode_summaries es
+            JOIN episodes e ON e.id = es.episode_id
+            JOIN podcasts p ON p.id = e.podcast_id
+            WHERE es.summary_md IS NOT NULL AND es.detail_level = 'standard'
+            ORDER BY es.created_at DESC
+            LIMIT 1
+            """
+        )
+        return cur.fetchone()
+
+
+def episode_summary_levels(episode_id: int) -> list[str]:
+    """Which detail levels already have a cached summary for this episode."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail_level FROM episode_summaries WHERE episode_id = %s",
+            (episode_id,),
+        )
+        return [r["detail_level"] for r in cur.fetchall()]
+
+
+def get_public_summary(episode_id: int, detail_level: str | None = None) -> dict | None:
+    """A cached summary for public (no-auth) viewing of a shared ?ep= link. Prefers
+    the requested level, then 'standard', then any available. Never generates."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT es.episode_id, es.summary_md, es.transcript_source, es.detail_level,
+                   e.title AS episode_title, e.episode_url, e.audio_url,
+                   p.title AS podcast_title, p.artwork_url
+            FROM episode_summaries es
+            JOIN episodes e ON e.id = es.episode_id
+            JOIN podcasts p ON p.id = e.podcast_id
+            WHERE es.episode_id = %s AND es.summary_md IS NOT NULL
+            ORDER BY (es.detail_level = COALESCE(%s, 'standard')) DESC,
+                     (es.detail_level = 'standard') DESC,
+                     es.created_at DESC
+            LIMIT 1
+            """,
+            (episode_id, detail_level),
+        )
+        return cur.fetchone()
+
+
+def count_person_episode_matches(person_id: int) -> int:
+    """How many catalogued episodes already feature this person — lets the UI give
+    immediate feedback ('found N recent episodes') when someone is followed."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM episode_people WHERE person_id = %s",
+            (person_id,),
+        )
+        return cur.fetchone()["n"]
+
+
+def count_topic_episode_matches(topic: str) -> int:
+    tl = (topic or "").lower()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT episode_id) AS n FROM episode_topics
+            WHERE lower(topic) LIKE %s OR %s LIKE '%%' || lower(topic) || '%%'
+            """,
+            (f"%{tl}%", tl),
+        )
+        return cur.fetchone()["n"]
+
+
+def latest_episode_published(podcast_id: int):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT MAX(published_at) AS m FROM episodes WHERE podcast_id = %s",
+            (podcast_id,),
+        )
+        row = cur.fetchone()
+        return row["m"] if row else None

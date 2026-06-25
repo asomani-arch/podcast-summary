@@ -98,6 +98,46 @@ def update_me(req: ProfileUpdate, user: User = Depends(current_user)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/api/me/export")
+def export_me(user: User = Depends(current_user)):
+    """Let a user download everything we hold for them (privacy promise in the
+    sign-in fine print)."""
+    db.ensure_profile(user.id, user.email)
+    return {
+        "exported_at":   datetime.utcnow().isoformat() + "Z",
+        "profile":       db.get_profile(user.id),
+        "subscriptions": db.list_subscriptions(user.id),
+        "people":        db.list_tracked_people(user.id),
+        "topics":        db.list_tracked_topics(user.id),
+        "deliveries":    db.list_deliveries(user.id, limit=500),
+    }
+
+
+@app.delete("/api/me")
+def delete_me(user: User = Depends(current_user)):
+    """Permanently delete the user's auth account; FK ON DELETE CASCADE removes all
+    their rows (profile, subscriptions, tracked people/topics, deliveries)."""
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    base = os.getenv("SUPABASE_URL")
+    if not service_key or not base:
+        raise HTTPException(
+            status_code=500,
+            detail="Account deletion isn't configured. Contact support to remove your data.",
+        )
+    import requests
+    try:
+        resp = requests.delete(
+            f"{base.rstrip('/')}/auth/v1/admin/users/{user.id}",
+            headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            timeout=10,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Could not reach the auth service: {e}")
+    if resp.status_code not in (200, 204):
+        raise HTTPException(status_code=502, detail="Could not delete the account. Try again.")
+    return {"ok": True}
+
+
 # ── Podcast search ─────────────────────────────────────────────────────────────
 
 @app.get("/api/search")
@@ -112,6 +152,58 @@ def search_podcasts(q: str = Query(..., min_length=1), user: User | None = Depen
         rss = (r.get("rss_url") or "").lower().rstrip("/")
         r["subscribed"] = bool(rss and rss in subscribed)
     return {"podcasts": results}
+
+
+# ── Discovery surfaces (warm the cold start) ───────────────────────────────────
+
+@app.get("/api/popular")
+def popular_podcasts(user: User | None = Depends(optional_user)):
+    """Curated popular shows for the empty home, so a new user has something to
+    browse before searching."""
+    results = db.list_popular_podcasts(limit=24)
+    subscribed = db.subscribed_rss_urls(user.id) if user else set()
+    for r in results:
+        rss = (r.get("rss_url") or "").lower().rstrip("/")
+        r["subscribed"] = bool(rss and rss in subscribed)
+    return {"podcasts": results}
+
+
+@app.get("/api/sample-summary")
+def sample_summary():
+    """One real, recently-generated summary to show a new user what they'll get."""
+    row = db.latest_public_summary()
+    if not row:
+        return {"sample": None}
+    return {"sample": {
+        "episode_id":    row["episode_id"],
+        "episode_title": row.get("episode_title") or "",
+        "podcast_title": row.get("podcast_title") or "",
+        "artwork_url":   row.get("artwork_url") or "",
+        "episode_url":   row.get("episode_url") or "",
+        "summary":       row.get("summary_md") or "",
+        "source":        row.get("transcript_source"),
+        "detail_level":  row.get("detail_level"),
+    }}
+
+
+@app.get("/api/public/episodes/{episode_id}/summary")
+def public_summary(episode_id: int, detail_level: str | None = Query(default=None)):
+    """No-auth read of a shared summary (a ?ep= link). Only returns already-cached
+    summaries — it never generates, and exposes no user data."""
+    row = db.get_public_summary(episode_id, detail_level)
+    if not row:
+        raise HTTPException(status_code=404, detail="Summary not found.")
+    return {
+        "episode_id":    episode_id,
+        "episode_title": row.get("episode_title") or "",
+        "podcast_title": row.get("podcast_title") or "",
+        "artwork_url":   row.get("artwork_url") or "",
+        "episode_url":   row.get("episode_url") or "",
+        "summary":       row.get("summary_md") or "",
+        "source":        row.get("transcript_source"),
+        "detail_level":  row.get("detail_level"),
+        "available_levels": db.episode_summary_levels(episode_id),
+    }
 
 
 # ── Episode list for a podcast (+ optional back-catalog search) ────────────────
@@ -159,12 +251,36 @@ class SummarizeRequest(BaseModel):
     episode_duration_seconds: int | None = None
     episode_transcript_url: str = ""
     episode_transcript_type: str = ""
+    detail_level: str | None = None   # per-view override; falls back to the profile default
+
+
+def _resolve_detail(req_level: str | None, profile: dict) -> str:
+    """A valid requested level wins (in-panel Quick/Standard/Deep toggle); otherwise
+    use the user's saved preference."""
+    if req_level and req_level in db.VALID_DETAIL_LEVELS:
+        return req_level
+    return profile.get("summary_detail") or "standard"
+
+
+def _ai_configured() -> bool:
+    """The summarizer needs a Gemini key. Missing it (e.g. a preview deploy that
+    didn't inherit the production secret) should yield a clear 503, not a raw 500."""
+    return bool(os.getenv("GEMINI_API_KEY"))
+
+
+def _require_ai() -> None:
+    if not _ai_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Summaries are temporarily unavailable — the AI service isn't configured "
+                   "for this environment. (Production has it; this preview is missing GEMINI_API_KEY.)",
+        )
 
 
 @app.post("/api/summarize")
 def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user)):
     profile = db.ensure_profile(user.id, user.email)
-    detail_level = profile.get("summary_detail") or "standard"
+    detail_level = _resolve_detail(req.detail_level, profile)
 
     podcast_id = db.upsert_podcast(
         req.rss_url, title=req.podcast_title, publisher=req.publisher,
@@ -198,6 +314,7 @@ def summarize_episode(req: SummarizeRequest, user: User = Depends(current_user))
             ),
         )
 
+    _require_ai()
     text, source = get_transcript(
         req.podcast_title, req.episode_title, req.episode_description,
         req.episode_audio_url, req.episode_url,
@@ -281,6 +398,65 @@ def update_subscription(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/subscriptions/{podcast_id}/seed-latest")
+def seed_latest_episode(podcast_id: int, user: User = Depends(current_user)):
+    """Right after subscribing, summarize the show's most recent episode and drop it
+    into the user's My Summaries — so subscribing produces an immediate, visible
+    result instead of an empty inbox until the next new episode airs.
+
+    Idempotent and cheap: the summary is globally cached, the delivery is deduped per
+    (user, episode), and it bypasses the manual daily cap (system backfill, one ep)."""
+    profile = db.ensure_profile(user.id, user.email)
+    detail_level = profile.get("summary_detail") or "standard"
+    podcast = db.get_podcast(podcast_id)
+    if not podcast or not podcast.get("rss_url"):
+        raise HTTPException(status_code=404, detail="Podcast not found.")
+
+    try:
+        episodes = catalog.episodes_from_rss(podcast["rss_url"], max_results=1)
+    except Exception:
+        return {"seeded": False, "reason": "episodes_unavailable"}
+    if not episodes:
+        return {"seeded": False, "reason": "no_episodes"}
+
+    ep = episodes[0]
+    episode_id = db.upsert_episode(
+        podcast_id, ep["guid"], title=ep["title"], description=ep.get("description", ""),
+        audio_url=ep.get("audio_url", ""), episode_url=ep.get("episode_url", ""),
+        published_at=ep.get("published_at"), duration_seconds=ep.get("duration_seconds"),
+    )
+
+    cached = db.get_episode_summary(episode_id, detail_level)
+    if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
+        summary_md, source = cached["summary_md"], cached.get("transcript_source")
+    else:
+        if not _ai_configured():
+            return {"seeded": False, "reason": "ai_unconfigured"}
+        text, source = get_transcript(
+            podcast["title"], ep["title"], ep.get("description", ""),
+            ep.get("audio_url", ""), ep.get("episode_url", ""),
+            transcript_url=ep.get("transcript_url", ""), transcript_type=ep.get("transcript_type", ""),
+        )
+        if not text:
+            return {"seeded": False, "reason": "no_transcript"}
+        summary_md = strip_summary_marker(summarize(
+            podcast["title"], ep["title"], text,
+            transcript_source=source, episode_duration=ep.get("duration_seconds"),
+            detail_level=detail_level,
+        ))
+        db.save_episode_summary(
+            episode_id, summary_md=summary_md, transcript_source=source,
+            model=SUMMARY_MODEL, style_version=SUMMARY_STYLE_VERSION, detail_level=detail_level,
+        )
+
+    reasons = [{"type": "show", "podcast_id": podcast_id}]
+    did = db.create_delivery(user.id, episode_id, reasons, status="sent")
+    if did is not None:
+        db.mark_delivery_sent(did)
+    return {"seeded": True, "episode_id": episode_id, "episode_title": ep["title"],
+            "summary": summary_md, "source": source, "detail_level": detail_level}
+
+
 # ── People tracking ────────────────────────────────────────────────────────────
 
 class TrackPersonRequest(BaseModel):
@@ -298,7 +474,9 @@ def track_person(req: TrackPersonRequest, user: User = Depends(current_user)):
     if len(name) < 2:
         raise HTTPException(status_code=400, detail="Enter a person's name.")
     db.ensure_profile(user.id, user.email)
-    return {"person": db.add_tracked_person(user.id, name)}
+    person = db.add_tracked_person(user.id, name)
+    matches = db.count_person_episode_matches(person["person_id"])
+    return {"person": person, "recent_matches": matches}
 
 
 @app.delete("/api/people")
@@ -324,7 +502,9 @@ def track_topic(req: TrackTopicRequest, user: User = Depends(current_user)):
     if len(topic) < 2:
         raise HTTPException(status_code=400, detail="Enter a topic.")
     db.ensure_profile(user.id, user.email)
-    return {"topic": db.add_tracked_topic(user.id, topic)}
+    saved = db.add_tracked_topic(user.id, topic)
+    matches = db.count_topic_episode_matches(topic)
+    return {"topic": saved, "recent_matches": matches}
 
 
 @app.delete("/api/topics")
@@ -348,16 +528,21 @@ def recommendations(user: User = Depends(current_user)):
 
 
 @app.post("/api/episodes/{episode_id}/summarize")
-def summarize_existing(episode_id: int, user: User = Depends(current_user)):
+def summarize_existing(
+    episode_id: int,
+    detail_level: str | None = Query(default=None),
+    user: User = Depends(current_user),
+):
     """Summarize an episode already in our catalog (e.g. a recommendation),
     using its stored metadata. Respects the global cache + the daily cap."""
     profile = db.ensure_profile(user.id, user.email)
-    detail_level = profile.get("summary_detail") or "standard"
+    detail_level = _resolve_detail(detail_level, profile)
     ep = db.get_episode_full(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found.")
 
-    titles = {"episode_title": ep.get("title") or "", "podcast_title": ep.get("podcast_title") or ""}
+    titles = {"episode_title": ep.get("title") or "", "podcast_title": ep.get("podcast_title") or "",
+              "episode_url": ep.get("episode_url") or "", "audio_url": ep.get("audio_url") or ""}
 
     cached = db.get_episode_summary(episode_id, detail_level)
     if cached and cached.get("style_version") == SUMMARY_STYLE_VERSION:
@@ -370,6 +555,7 @@ def summarize_existing(episode_id: int, user: User = Depends(current_user)):
             status_code=429,
             detail=f"Daily limit of {MANUAL_SUMMARY_DAILY_CAP} on-demand summaries reached.",
         )
+    _require_ai()
     text, source = get_transcript(
         ep["podcast_title"], ep["title"], ep.get("description") or "",
         ep.get("audio_url") or "", ep.get("episode_url") or "",

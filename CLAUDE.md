@@ -80,6 +80,48 @@ Subscriptions tray (saved preference, like cadence). It applies to summaries the
   to `(episode_id, detail_level)`. The new code's `ON CONFLICT (episode_id, detail_level)`
   needs this, so **run the migration before/with the deploy**, not after.
 
+### Product feedback round 3 (2026-06-22) — UX review (cold-start, sharing, IA, a11y)
+
+Acted on a full PM/UX review of the logged-in and shared experiences. **No DB
+migration this round** — everything runs on the existing v5 schema.
+
+- **Cold start.** The empty home was three blank screens for a new user. Now it
+  shows a **real sample summary** (`GET /api/sample-summary`) and a **grid of popular
+  shows to browse** (`GET /api/popular`, from the `is_popular` set — re-run
+  `seed-popular` if prod ever loses them). Subscribing now **auto-summarizes the
+  latest episode** into My Summaries (`POST /api/subscriptions/{id}/seed-latest`;
+  background call, dedup-safe, bypasses the manual daily cap). Following a
+  person/topic returns `recent_matches` for immediate feedback.
+- **Summary panel.** Added a **Listen-to-episode** link + **AI-accuracy disclaimer**
+  and an **in-panel Quick/Standard/Deep toggle** (`detail_level` override on
+  `/api/summarize` + `/api/episodes/{id}/summarize`) that regenerates the current
+  summary *without* changing the saved preference. Added a **stale-response guard**
+  (`state.panelReq`) and browser/mobile **Back closes the panel**.
+- **Sharing / growth.** Signed-out `?ep=` links open a **public read-only summary
+  page** with a sign-up CTA (`GET /api/public/episodes/{id}/summary` — serves only
+  already-cached summaries, exposes no user data) instead of dead-ending on the login
+  wall. `episode_url`/`audio_url` added to deliveries + recommendations for the Listen link.
+- **IA + account.** Global preferences (cadence, summary detail) moved out of the
+  Subscriptions tray into a dedicated **Settings** panel (profile menu), which also
+  has **data export** (`GET /api/me/export`) and **account deletion** (`DELETE /api/me`,
+  uses `SUPABASE_SERVICE_ROLE_KEY` admin API → FK cascade).
+- **Discovery hub (follow-up).** Following guests/topics was buried in the
+  Subscriptions tray where non-technical users never found it — and "For You" told
+  them to follow people with no way to do so there. Moved the follow controls onto
+  the **For You** page itself (now the discovery hub: add guest/topic as removable
+  **chips** right above the recommendations they power), added a front-and-center
+  **discovery banner** on the home empty state, and left a pointer to For You in the
+  Subscriptions tray. The tray is now purely shows; For You owns people/topics.
+- **Polish / a11y.** Esc closes dropdowns/panel/trays; **resend-link** affordance on
+  the sign-in screen; higher-contrast empty/placeholder copy; episode titles clamp to
+  two lines; "Recommended for you" → "For You".
+
+**Deferred (still open):** streaming/progressive summary render (the 1–2 min wait is
+the roughest moment); guest-name autocomplete/disambiguation; true people/topic
+universe scan (needs a Podcast Index key). **Auth email rate limits:** Supabase's
+built-in auth email is project-wide rate-limited on the free tier — worth a custom
+SMTP before any real launch (separate from the Resend summary-email limit).
+
 ---
 
 ## Live deployment
